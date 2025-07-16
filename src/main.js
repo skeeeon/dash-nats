@@ -6,6 +6,11 @@ import router from './router';
 // Import global styles
 import './style.css';
 
+// Import and initialize stores
+import { useConnectionStore } from '@/stores/connection.js';
+import { useDashboardStore } from '@/stores/dashboard.js';
+import { useCardsStore } from '@/stores/cards.js';
+
 /**
  * NATS Dashboard Application Entry Point
  * 
@@ -56,8 +61,49 @@ if (import.meta.env.DEV) {
   app.config.performance = true;
 }
 
+// Click outside directive for dropdowns
+app.directive('click-outside', {
+  mounted(el, binding) {
+    const handleClick = (event) => {
+      if (!el.contains(event.target)) {
+        binding.value();
+      }
+    };
+    
+    el._clickOutsideHandler = handleClick;
+    document.addEventListener('click', handleClick);
+  },
+  unmounted(el) {
+    if (el._clickOutsideHandler) {
+      document.removeEventListener('click', el._clickOutsideHandler);
+      delete el._clickOutsideHandler;
+    }
+  }
+});
+
 // Mount application
 app.mount('#app');
+
+// Initialize stores after app is mounted
+const connectionStore = useConnectionStore();
+const dashboardStore = useDashboardStore();
+const cardsStore = useCardsStore();
+
+// Initialize stores in the correct order
+Promise.resolve().then(() => {
+  console.log('📊 Initializing stores...');
+  
+  // Initialize connection store first
+  connectionStore.initialize();
+  
+  // Initialize dashboard store
+  dashboardStore.initialize();
+  
+  // Initialize cards store
+  cardsStore.initialize();
+  
+  console.log('✅ Stores initialized successfully');
+});
 
 // Application initialization logging
 console.log('✅ NATS Dashboard initialized successfully');
@@ -83,6 +129,11 @@ if (import.meta.env.DEV) {
     app,
     router,
     pinia,
+    stores: {
+      connection: connectionStore,
+      dashboard: dashboardStore,
+      cards: cardsStore
+    },
     // Add development helpers here
     clearStorage: () => {
       localStorage.clear();
@@ -91,6 +142,16 @@ if (import.meta.env.DEV) {
     },
     reload: () => {
       window.location.reload();
+    },
+    // Debug helpers
+    debugCards: () => {
+      console.log('Cards state:', cardsStore.cardStates);
+      console.log('Card messages:', cardsStore.cardMessages);
+      console.log('Card subscriptions:', cardsStore.cardSubscriptions);
+    },
+    debugDashboard: () => {
+      console.log('Active dashboard:', dashboardStore.activeDashboard);
+      console.log('All dashboards:', dashboardStore.dashboards);
     }
   };
   
