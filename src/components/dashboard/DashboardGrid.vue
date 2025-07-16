@@ -141,7 +141,7 @@ const {
   gridOptions: defaultGridOptions,
   setGridInstance,
   updateGridLayout,
-  getCardLayout,
+  getCardLayout, // This is the correct method from composable - no local function needed
   addCard,
   removeCard: removeDashboardCard,
   updateCard: updateDashboardCard
@@ -193,6 +193,14 @@ const mergedGridOptions = computed(() => ({
   disableOneColumnMode: true,
   rtl: false
 }));
+
+// Card dimension helpers
+const cardDimensions = {
+  publisher: { defaultW: 4, defaultH: 3, minW: 2, minH: 2 },
+  subscriber: { defaultW: 6, defaultH: 5, minW: 3, minH: 3 },
+  chart: { defaultW: 8, defaultH: 6, minW: 4, minH: 4 },
+  default: { defaultW: 4, defaultH: 3, minW: 2, minH: 2 }
+};
 
 // Methods
 
@@ -371,58 +379,31 @@ function saveGridLayout() {
 }
 
 /**
- * Get card layout or default
- */
-function getCardLayout(cardId) {
-  return getCardLayout(cardId) || null;
-}
-
-/**
  * Get default width for card type
  */
 function getDefaultWidth(cardType) {
-  switch (cardType) {
-    case 'publisher': return 4;
-    case 'subscriber': return 6;
-    case 'chart': return 8;
-    default: return 4;
-  }
+  return cardDimensions[cardType]?.defaultW || cardDimensions.default.defaultW;
 }
 
 /**
  * Get default height for card type
  */
 function getDefaultHeight(cardType) {
-  switch (cardType) {
-    case 'publisher': return 3;
-    case 'subscriber': return 5;
-    case 'chart': return 6;
-    default: return 3;
-  }
+  return cardDimensions[cardType]?.defaultH || cardDimensions.default.defaultH;
 }
 
 /**
  * Get minimum width for card type
  */
 function getMinWidth(cardType) {
-  switch (cardType) {
-    case 'publisher': return 2;
-    case 'subscriber': return 3;
-    case 'chart': return 4;
-    default: return 2;
-  }
+  return cardDimensions[cardType]?.minW || cardDimensions.default.minW;
 }
 
 /**
  * Get minimum height for card type
  */
 function getMinHeight(cardType) {
-  switch (cardType) {
-    case 'publisher': return 2;
-    case 'subscriber': return 3;
-    case 'chart': return 4;
-    default: return 2;
-  }
+  return cardDimensions[cardType]?.minH || cardDimensions.default.minH;
 }
 
 /**
@@ -463,6 +444,13 @@ function updateCard(cardData) {
 }
 
 /**
+ * Remove card
+ */
+function removeCard(cardId) {
+  removeCardFromGrid(cardId);
+}
+
+/**
  * Handle card resize start
  */
 function handleCardResizeStart(data) {
@@ -475,6 +463,7 @@ function handleCardResizeStart(data) {
  */
 function handleCardResize(data) {
   // This is handled by GridStack itself
+  console.log('[DashboardGrid] Card resize:', data.cardId);
 }
 
 /**

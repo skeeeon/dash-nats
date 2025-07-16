@@ -187,3 +187,455 @@
     </div>
   </div>
 </template>
+
+<script setup>
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useDashboard } from '@/composables/useDashboard.js';
+import { useNatsConnection } from '@/composables/useNatsConnection.js';
+import { useToast } from '@/composables/useToast.js';
+import DashboardGrid from '@/components/dashboard/DashboardGrid.vue';
+
+// Router and route
+const route = useRoute();
+const router = useRouter();
+
+// Composables
+const {
+  activeDashboard,
+  hasCards,
+  isLoading: isDashboardLoadingFromStore,
+  addCard: addCardToStore,
+  removeCard: removeCardFromStore,
+  exportDashboard: exportDashboardFromStore,
+  importDashboard: importDashboardFromStore,
+  initialize: initializeDashboard
+} = useDashboard();
+
+const {
+  isConnected,
+  connectionStatusText,
+  connectionError
+} = useNatsConnection();
+
+const { success, error, info, warning } = useToast();
+
+// Local reactive state
+const dashboardGrid = ref(null);
+const showAddCard = ref(false);
+const showDashboardMenu = ref(false);
+const isDashboardLoading = ref(false);
+const selectedCardId = ref(null);
+
+// Props and configuration
+const dashboardId = computed(() => route.params.id || 'default');
+const showStatusText = ref(false);
+const allowTitleEdit = ref(true);
+
+// Computed properties
+const dashboardTitle = computed(() => {
+  return activeDashboard.value?.name || 'Dashboard';
+});
+
+const cards = computed(() => {
+  return activeDashboard.value?.cards || [];
+});
+
+const connectionStatusMessage = computed(() => {
+  if (!isConnected.value) {
+    return connectionError.value 
+      ? `Connection error: ${connectionError.value.message}`
+      : 'Not connected to NATS';
+  }
+  return `Connected • ${connectionStatusText.value}`;
+});
+
+// Methods
+
+/**
+ * Navigate to connections page
+ */
+function navigateToConnections() {
+  router.push({ name: 'connections' });
+}
+
+/**
+ * Add a new card to the dashboard
+ * @param {string} cardType - Type of card to add
+ */
+async function addCard(cardType) {
+  if (!isConnected.value) {
+    error('Must be connected to NATS to add cards');
+    return;
+  }
+
+  try {
+    isDashboardLoading.value = true;
+    
+    // Create default card configuration based on type
+    const cardConfig = createDefaultCardConfig(cardType);
+    
+    // Add card through composable
+    const newCard = await addCardToStore(cardConfig);
+    
+    if (newCard) {
+      success(`${cardType.charAt(0).toUpperCase() + cardType.slice(1)} card added`);
+      
+      // Close modal
+      showAddCard.value = false;
+      
+      // Wait for grid to update then refresh
+      await nextTick();
+      if (dashboardGrid.value) {
+        dashboardGrid.value.refreshGrid();
+      }
+    }
+  } catch (err) {
+    console.error('[Dashboard] Failed to add card:', err);
+    error(`Failed to add ${cardType} card: ${err.message}`);
+  } finally {
+    isDashboardLoading.value = false;
+  }
+}
+
+/**
+ * Clear all cards from the dashboard
+ */
+async function clearDashboard() {
+  if (!hasCards.value) {
+    info('Dashboard is already empty');
+    return;
+  }
+
+  const confirmMessage = `Are you sure you want to remove all ${cards.value.length} cards? This cannot be undone.`;
+  
+  if (confirm(confirmMessage)) {
+    try {
+      isDashboardLoading.value = true;
+      
+      // Remove all cards
+      const cardIds = cards.value.map(card => card.id);
+      
+      for (const cardId of cardIds) {
+        await removeCardFromStore(cardId);
+      }
+      
+      success('Dashboard cleared');
+      
+      // Refresh grid
+      await nextTick();
+      if (dashboardGrid.value) {
+        dashboardGrid.value.refreshGrid();
+      }
+    } catch (err) {
+      console.error('[Dashboard] Failed to clear dashboard:', err);
+      error(`Failed to clear dashboard: ${err.message}`);
+    } finally {
+      isDashboardLoading.value = false;
+    }
+  }
+  
+  // Close menu
+  showDashboardMenu.value = false;
+}
+
+/**
+ * Export dashboard configuration
+ */
+function exportDashboard() {
+  try {
+    const config = exportDashboardFromStore(dashboardId.value);
+    
+    if (!config) {
+      error('No dashboard configuration to export');
+      return;
+    }
+    
+    const dataStr = JSON.stringify(config, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dashboard-${config.name || 'export'}-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    success('Dashboard exported successfully');
+  } catch (err) {
+    console.error('[Dashboard] Export failed:', err);
+    error('Failed to export dashboard');
+  }
+  
+  // Close menu
+  showDashboardMenu.value = false;
+}
+
+/**
+ * Import dashboard configuration
+ */
+function importDashboard() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  
+  input.onchange = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    try {
+      const text = await file.text();
+      const config = JSON.parse(text);
+      
+      const success_result = importDashboardFromStore(config);
+      
+      if (success_result) {
+        success('Dashboard imported successfully');
+        
+        // Refresh the dashboard
+        await nextTick();
+        if (dashboardGrid.value) {
+          dashboardGrid.value.refreshGrid();
+        }
+      } else {
+        error('Failed to import dashboard');
+      }
+    } catch (err) {
+      console.error('[Dashboard] Import failed:', err);
+      error('Invalid dashboard file');
+    }
+  };
+  
+  input.click();
+  
+  // Close menu
+  showDashboardMenu.value = false;
+}
+
+/**
+ * Handle card selection
+ * @param {string} cardId - Selected card ID
+ */
+function handleCardSelected(cardId) {
+  selectedCardId.value = cardId;
+  console.log(`[Dashboard] Card selected: ${cardId}`);
+}
+
+/**
+ * Handle card deselection
+ */
+function handleCardDeselected() {
+  selectedCardId.value = null;
+  console.log('[Dashboard] Card deselected');
+}
+
+/**
+ * Handle card added event
+ * @param {Object} card - Added card
+ */
+function handleCardAdded(card) {
+  console.log(`[Dashboard] Card added: ${card.id}`);
+}
+
+/**
+ * Handle card removed event
+ * @param {string} cardId - Removed card ID
+ */
+function handleCardRemoved(cardId) {
+  console.log(`[Dashboard] Card removed: ${cardId}`);
+}
+
+/**
+ * Handle layout changed event
+ * @param {Array} layout - New layout
+ */
+function handleLayoutChanged(layout) {
+  console.log(`[Dashboard] Layout changed: ${layout.length} items`);
+}
+
+/**
+ * Create default card configuration
+ * @param {string} type - Card type
+ * @returns {Object} Card configuration
+ */
+function createDefaultCardConfig(type) {
+  const baseConfig = {
+    type,
+    title: `${type.charAt(0).toUpperCase() + type.slice(1)} Card`,
+    config: {}
+  };
+  
+  switch (type) {
+    case 'publisher':
+      return {
+        ...baseConfig,
+        config: {
+          buttons: [{
+            id: `btn_${Date.now()}`,
+            label: 'Send Message',
+            topic: 'test.topic',
+            payload: { message: 'Hello World', timestamp: new Date().toISOString() },
+            style: { color: '#ffffff', bgColor: '#3b82f6' }
+          }]
+        }
+      };
+      
+    case 'subscriber':
+      return {
+        ...baseConfig,
+        config: {
+          topic: 'test.topic',
+          displayType: 'json',
+          maxMessages: 100,
+          autoScroll: true
+        }
+      };
+      
+    case 'chart':
+      return {
+        ...baseConfig,
+        config: {
+          topic: 'test.topic',
+          jsonPath: 'value',
+          chartType: 'line',
+          maxPoints: 100
+        }
+      };
+      
+    default:
+      return baseConfig;
+  }
+}
+
+/**
+ * Initialize dashboard
+ */
+async function initializeDashboardView() {
+  try {
+    isDashboardLoading.value = true;
+    
+    // Initialize dashboard system
+    await initializeDashboard();
+    
+    console.log(`[Dashboard] Dashboard initialized: ${dashboardId.value}`);
+  } catch (err) {
+    console.error('[Dashboard] Initialization failed:', err);
+    error('Failed to initialize dashboard');
+  } finally {
+    isDashboardLoading.value = false;
+  }
+}
+
+/**
+ * Handle keyboard shortcuts
+ * @param {KeyboardEvent} event - Keyboard event
+ */
+function handleKeyboardShortcuts(event) {
+  // Only handle shortcuts when not in input fields
+  if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
+    return;
+  }
+  
+  if (event.ctrlKey || event.metaKey) {
+    switch (event.key) {
+      case 'k':
+        event.preventDefault();
+        if (isConnected.value) {
+          showAddCard.value = true;
+        }
+        break;
+        
+      case 'e':
+        event.preventDefault();
+        exportDashboard();
+        break;
+        
+      case 'i':
+        event.preventDefault();
+        importDashboard();
+        break;
+    }
+  }
+  
+  // Escape key handling
+  if (event.key === 'Escape') {
+    if (showAddCard.value) {
+      showAddCard.value = false;
+    } else if (showDashboardMenu.value) {
+      showDashboardMenu.value = false;
+    }
+  }
+}
+
+// Lifecycle hooks
+onMounted(async () => {
+  console.log('[Dashboard] Mounting dashboard view');
+  
+  // Initialize dashboard
+  await initializeDashboardView();
+  
+  // Set up keyboard shortcuts
+  document.addEventListener('keydown', handleKeyboardShortcuts);
+  
+  // Set up dashboard grid container after mount
+  await nextTick();
+  if (dashboardGrid.value) {
+    console.log('[Dashboard] Dashboard grid ready');
+  }
+});
+
+onUnmounted(() => {
+  console.log('[Dashboard] Unmounting dashboard view');
+  
+  // Clean up keyboard shortcuts
+  document.removeEventListener('keydown', handleKeyboardShortcuts);
+  
+  // Clear selected card
+  selectedCardId.value = null;
+});
+</script>
+
+<style scoped>
+/* Dashboard specific styles */
+.dashboard-header {
+  backdrop-filter: blur(8px);
+}
+
+/* Loading animation */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Modal backdrop */
+.fixed.inset-0.bg-black\/50 {
+  backdrop-filter: blur(2px);
+}
+
+/* Card type buttons in modal */
+.card-type-button {
+  transition: all 0.2s ease;
+}
+
+.card-type-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .dashboard-header {
+    padding: 1rem;
+  }
+  
+  .card-type-button {
+    padding: 0.75rem;
+  }
+}
+</style>
