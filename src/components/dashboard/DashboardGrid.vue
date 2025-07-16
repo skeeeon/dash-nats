@@ -1,54 +1,12 @@
 <template>
   <div class="dashboard-grid-container h-full w-full overflow-hidden">
-    <!-- Grid Container -->
+    <!-- Grid Container - GridStack will manage all widgets -->
     <div 
       ref="gridContainer"
       class="grid-stack h-full w-full"
       :class="{ 'grid-disabled': !isConnected }"
     >
-      <!-- Grid Items (Cards) -->
-      <div
-        v-for="card in cards"
-        :key="card.id"
-        class="grid-stack-item"
-        :data-gs-id="card.id"
-        :data-gs-x="getCardLayout(card.id)?.x || 0"
-        :data-gs-y="getCardLayout(card.id)?.y || 0"
-        :data-gs-w="getCardLayout(card.id)?.w || getDefaultWidth(card.type)"
-        :data-gs-h="getCardLayout(card.id)?.h || getDefaultHeight(card.type)"
-        :data-gs-min-w="getMinWidth(card.type)"
-        :data-gs-min-h="getMinHeight(card.type)"
-        :data-gs-max-w="getMaxWidth(card.type)"
-        :data-gs-max-h="getMaxHeight(card.type)"
-      >
-        <div class="grid-stack-item-content h-full w-full">
-          <CardWrapper
-            :card="card"
-            :is-selected="selectedCardId === card.id"
-            :draggable="true"
-            :resizable="true"
-            :show-status-text="showStatusText"
-            :allow-title-edit="allowTitleEdit"
-            @select="selectCard"
-            @deselect="deselectCard"
-            @remove="removeCard"
-            @update="updateCard"
-            @resize-start="handleCardResizeStart"
-            @resize="handleCardResize"
-            @resize-end="handleCardResizeEnd"
-          >
-            <!-- Configuration slot for specific card types -->
-            <template #configuration="{ card, close }">
-              <component
-                :is="getCardConfigComponent(card.type)"
-                :card="card"
-                :close="close"
-                @save="handleCardConfigSave"
-              />
-            </template>
-          </CardWrapper>
-        </div>
-      </div>
+      <!-- No v-for loop - GridStack manages widgets directly -->
     </div>
     
     <!-- Empty State -->
@@ -85,7 +43,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, createApp, h } from 'vue';
 import { GridStack } from 'gridstack';
 import { useDashboard } from '@/composables/useDashboard.js';
 import { useCards } from '@/composables/useCards.js';
@@ -98,33 +56,18 @@ import 'gridstack/dist/gridstack.min.css';
 
 // Props
 const props = defineProps({
-  /**
-   * Dashboard ID to display
-   */
   dashboardId: {
     type: String,
     default: 'default'
   },
-  
-  /**
-   * Whether to show status text in cards
-   */
   showStatusText: {
     type: Boolean,
     default: false
   },
-  
-  /**
-   * Whether to allow title editing
-   */
   allowTitleEdit: {
     type: Boolean,
     default: true
   },
-  
-  /**
-   * Grid options override
-   */
   gridOptions: {
     type: Object,
     default: () => ({})
@@ -139,9 +82,8 @@ const {
   activeDashboard, 
   hasCards, 
   gridOptions: defaultGridOptions,
-  setGridInstance,
   updateGridLayout,
-  getCardLayout, // This is the correct method from composable - no local function needed
+  getCardLayout,
   addCard,
   removeCard: removeDashboardCard,
   updateCard: updateDashboardCard
@@ -151,12 +93,15 @@ const { initializeCard, cleanupCard } = useCards();
 const { isConnected } = useNatsConnection();
 const { success, error } = useToast();
 
-// Local state
+// Local state - NOT reactive to avoid conflicts with GridStack
+let gridInstance = null;
 const gridContainer = ref(null);
-const gridInstance = ref(null);
 const selectedCardId = ref(null);
 const isDragging = ref(false);
 const isResizing = ref(false);
+
+// Store Vue app instances for each widget
+const widgetApps = new Map();
 
 // Computed properties
 const cards = computed(() => activeDashboard.value.cards || []);
@@ -174,7 +119,6 @@ const emptyStateMessage = computed(() => {
 const mergedGridOptions = computed(() => ({
   ...defaultGridOptions.value,
   ...props.gridOptions,
-  // Core grid configuration
   cellHeight: 100,
   margin: 5,
   animate: true,
@@ -187,7 +131,6 @@ const mergedGridOptions = computed(() => ({
   draggable: {
     handle: '.card-drag-handle'
   },
-  // Event handlers
   acceptWidgets: false,
   alwaysShowResizeHandle: false,
   disableOneColumnMode: true,
@@ -214,17 +157,14 @@ async function initializeGrid() {
       return;
     }
     
-    // Initialize GridStack
-    gridInstance.value = GridStack.init(mergedGridOptions.value, gridContainer.value);
+    // Initialize GridStack - keep as plain JavaScript object
+    gridInstance = GridStack.init(mergedGridOptions.value, gridContainer.value);
     
     // Set up event listeners
     setupGridEventListeners();
     
-    // Register grid instance with dashboard store
-    setGridInstance(gridInstance.value);
-    
     // Load existing cards
-    await loadCards();
+    await loadExistingCards();
     
     console.log('[DashboardGrid] Grid initialized successfully');
   } catch (err) {
@@ -237,54 +177,144 @@ async function initializeGrid() {
  * Setup GridStack event listeners
  */
 function setupGridEventListeners() {
-  if (!gridInstance.value) return;
+  if (!gridInstance) return;
   
-  // Drag start
-  gridInstance.value.on('dragstart', (event, el) => {
+  // Widget added event - mount Vue component
+  gridInstance.on('added', (event, items) => {
+    items.forEach(item => {
+      const cardId = item.id;
+      const card = cards.value.find(c => c.id === cardId);
+      if (card) {
+        mountCardComponent(item.el, card);
+      }
+    });
+  });
+  
+  // Widget removed event - unmount Vue component
+  gridInstance.on('removed', (event, items) => {
+    items.forEach(item => {
+      const cardId = item.id;
+      unmountCardComponent(cardId);
+    });
+  });
+  
+  // Drag events
+  gridInstance.on('dragstart', (event, el) => {
     isDragging.value = true;
-    const cardId = el.getAttribute('data-gs-id');
+    const cardId = el.getAttribute('gs-id');
     console.log('[DashboardGrid] Drag start:', cardId);
   });
   
-  // Drag stop
-  gridInstance.value.on('dragstop', (event, el) => {
+  gridInstance.on('dragstop', (event, el) => {
     isDragging.value = false;
-    const cardId = el.getAttribute('data-gs-id');
+    const cardId = el.getAttribute('gs-id');
     console.log('[DashboardGrid] Drag stop:', cardId);
     saveGridLayout();
   });
   
-  // Resize start
-  gridInstance.value.on('resizestart', (event, el) => {
+  // Resize events
+  gridInstance.on('resizestart', (event, el) => {
     isResizing.value = true;
-    const cardId = el.getAttribute('data-gs-id');
+    const cardId = el.getAttribute('gs-id');
     console.log('[DashboardGrid] Resize start:', cardId);
   });
   
-  // Resize stop
-  gridInstance.value.on('resizestop', (event, el) => {
+  gridInstance.on('resizestop', (event, el) => {
     isResizing.value = false;
-    const cardId = el.getAttribute('data-gs-id');
+    const cardId = el.getAttribute('gs-id');
     console.log('[DashboardGrid] Resize stop:', cardId);
     saveGridLayout();
   });
   
-  // General change event
-  gridInstance.value.on('change', (event, items) => {
+  // General change event - sync with store
+  gridInstance.on('change', (event, items) => {
     if (items && items.length > 0) {
       console.log('[DashboardGrid] Layout changed:', items);
+      syncLayoutToStore(items);
       emit('layout-changed', items);
     }
   });
 }
 
 /**
+ * Mount Vue component into GridStack widget
+ */
+function mountCardComponent(element, card) {
+  const contentElement = element.querySelector('.grid-stack-item-content');
+  if (!contentElement) return;
+  
+  // Create Vue app instance for this widget
+  const app = createApp({
+    render() {
+      return h(CardWrapper, {
+        card,
+        isSelected: selectedCardId.value === card.id,
+        draggable: true,
+        resizable: true,
+        showStatusText: props.showStatusText,
+        allowTitleEdit: props.allowTitleEdit,
+        onSelect: selectCard,
+        onDeselect: deselectCard,
+        onRemove: removeCard,
+        onUpdate: updateCard,
+        onResizeStart: handleCardResizeStart,
+        onResize: handleCardResize,
+        onResizeEnd: handleCardResizeEnd
+      });
+    }
+  });
+  
+  // Mount the app
+  app.mount(contentElement);
+  
+  // Store the app instance for cleanup
+  widgetApps.set(card.id, app);
+  
+  console.log('[DashboardGrid] Mounted component for card:', card.id);
+}
+
+/**
+ * Unmount Vue component from GridStack widget
+ */
+function unmountCardComponent(cardId) {
+  const app = widgetApps.get(cardId);
+  if (app) {
+    app.unmount();
+    widgetApps.delete(cardId);
+    console.log('[DashboardGrid] Unmounted component for card:', cardId);
+  }
+}
+
+/**
  * Load existing cards into the grid
  */
-async function loadCards() {
-  if (!gridInstance.value) return;
+async function loadExistingCards() {
+  if (!gridInstance) return;
   
   try {
+    // Clear existing widgets
+    gridInstance.removeAll();
+    
+    // Add cards to grid
+    const widgets = cards.value.map(card => {
+      const layout = getCardLayout(card.id);
+      const dimensions = cardDimensions[card.type] || cardDimensions.default;
+      
+      return {
+        id: card.id,
+        x: layout?.x || 0,
+        y: layout?.y || 0,
+        w: layout?.w || dimensions.defaultW,
+        h: layout?.h || dimensions.defaultH,
+        minW: dimensions.minW,
+        minH: dimensions.minH,
+        content: '<div class="grid-stack-item-content h-full w-full"></div>'
+      };
+    });
+    
+    // Add widgets to grid (this will trigger 'added' event)
+    gridInstance.addWidget(widgets);
+    
     // Initialize card states
     for (const card of cards.value) {
       initializeCard(card.id, card);
@@ -300,24 +330,36 @@ async function loadCards() {
  * Add a new card to the grid
  */
 async function addCardToGrid(cardConfig) {
-  if (!gridInstance.value) {
+  if (!gridInstance) {
     console.warn('[DashboardGrid] Grid not initialized');
     return;
   }
   
   try {
-    // Add card to dashboard
+    // Add card to dashboard store
     const newCard = await addCard(cardConfig);
+    
+    // Get dimensions and layout
+    const dimensions = cardDimensions[newCard.type] || cardDimensions.default;
+    const layout = getCardLayout(newCard.id);
+    
+    // Create widget for GridStack
+    const widget = {
+      id: newCard.id,
+      x: layout?.x || 0,
+      y: layout?.y || 0,
+      w: layout?.w || dimensions.defaultW,
+      h: layout?.h || dimensions.defaultH,
+      minW: dimensions.minW,
+      minH: dimensions.minH,
+      content: '<div class="grid-stack-item-content h-full w-full"></div>'
+    };
+    
+    // Add widget to grid (this will trigger 'added' event)
+    gridInstance.addWidget(widget);
     
     // Initialize card state
     initializeCard(newCard.id, newCard);
-    
-    // The card will be automatically added to the grid through Vue reactivity
-    await nextTick();
-    
-    // Make the grid re-layout
-    gridInstance.value.batchUpdate();
-    gridInstance.value.commit();
     
     console.log('[DashboardGrid] Added card to grid:', newCard.id);
     emit('card-added', newCard);
@@ -333,13 +375,21 @@ async function addCardToGrid(cardConfig) {
  * Remove a card from the grid
  */
 async function removeCardFromGrid(cardId) {
-  if (!gridInstance.value) return;
+  if (!gridInstance) return;
   
   try {
+    // Find the widget element
+    const widget = gridInstance.getGridItems().find(el => el.getAttribute('gs-id') === cardId);
+    
+    if (widget) {
+      // Remove from grid (this will trigger 'removed' event)
+      gridInstance.removeWidget(widget);
+    }
+    
     // Cleanup card state
     await cleanupCard(cardId);
     
-    // Remove from dashboard
+    // Remove from dashboard store
     await removeDashboardCard(cardId);
     
     // Deselect if this card was selected
@@ -356,68 +406,33 @@ async function removeCardFromGrid(cardId) {
 }
 
 /**
+ * Sync GridStack layout changes to store
+ */
+function syncLayoutToStore(items) {
+  const layoutItems = items.map(item => ({
+    id: item.id,
+    x: item.x,
+    y: item.y,
+    w: item.w,
+    h: item.h
+  }));
+  
+  updateGridLayout(layoutItems);
+}
+
+/**
  * Save current grid layout
  */
 function saveGridLayout() {
-  if (!gridInstance.value) return;
+  if (!gridInstance) return;
   
   try {
-    const serializedLayout = gridInstance.value.save();
-    const layoutItems = serializedLayout.map(item => ({
-      id: item.id,
-      x: item.x,
-      y: item.y,
-      w: item.w,
-      h: item.h
-    }));
-    
-    updateGridLayout(layoutItems);
+    const serializedLayout = gridInstance.save();
+    syncLayoutToStore(serializedLayout);
     console.log('[DashboardGrid] Layout saved');
   } catch (err) {
     console.error('[DashboardGrid] Failed to save layout:', err);
   }
-}
-
-/**
- * Get default width for card type
- */
-function getDefaultWidth(cardType) {
-  return cardDimensions[cardType]?.defaultW || cardDimensions.default.defaultW;
-}
-
-/**
- * Get default height for card type
- */
-function getDefaultHeight(cardType) {
-  return cardDimensions[cardType]?.defaultH || cardDimensions.default.defaultH;
-}
-
-/**
- * Get minimum width for card type
- */
-function getMinWidth(cardType) {
-  return cardDimensions[cardType]?.minW || cardDimensions.default.minW;
-}
-
-/**
- * Get minimum height for card type
- */
-function getMinHeight(cardType) {
-  return cardDimensions[cardType]?.minH || cardDimensions.default.minH;
-}
-
-/**
- * Get maximum width for card type
- */
-function getMaxWidth(cardType) {
-  return 12; // Full width
-}
-
-/**
- * Get maximum height for card type
- */
-function getMaxHeight(cardType) {
-  return 20; // Reasonable maximum
 }
 
 /**
@@ -451,24 +466,17 @@ function removeCard(cardId) {
 }
 
 /**
- * Handle card resize start
+ * Handle card resize events
  */
 function handleCardResizeStart(data) {
   isResizing.value = true;
   console.log('[DashboardGrid] Card resize start:', data.cardId);
 }
 
-/**
- * Handle card resize
- */
 function handleCardResize(data) {
-  // This is handled by GridStack itself
   console.log('[DashboardGrid] Card resize:', data.cardId);
 }
 
-/**
- * Handle card resize end
- */
 function handleCardResizeEnd(data) {
   isResizing.value = false;
   saveGridLayout();
@@ -476,39 +484,31 @@ function handleCardResizeEnd(data) {
 }
 
 /**
- * Handle card configuration save
+ * Refresh grid layout
  */
-function handleCardConfigSave(data) {
-  updateCard(data);
-  success('Card configuration saved');
+function refreshGrid() {
+  if (gridInstance) {
+    gridInstance.batchUpdate();
+    gridInstance.commit();
+  }
 }
 
 /**
- * Get card configuration component
- */
-function getCardConfigComponent(cardType) {
-  // Return default configuration component
-  // In a more advanced implementation, this would return type-specific components
-  return {
-    template: `
-      <div class="text-sm text-muted-foreground text-center py-8">
-        <p>Configuration for {{ cardType }} cards</p>
-        <p class="text-xs mt-2">This will be implemented in Phase 3</p>
-      </div>
-    `,
-    props: ['card', 'close'],
-    emits: ['save']
-  };
-}
-
-/**
- * Cleanup grid instance
+ * Cleanup grid instance and all mounted components
  */
 function cleanupGrid() {
-  if (gridInstance.value) {
+  if (gridInstance) {
     try {
-      gridInstance.value.destroy();
-      gridInstance.value = null;
+      // Unmount all Vue components
+      widgetApps.forEach((app, cardId) => {
+        app.unmount();
+      });
+      widgetApps.clear();
+      
+      // Destroy GridStack instance
+      gridInstance.destroy();
+      gridInstance = null;
+      
       console.log('[DashboardGrid] Grid cleaned up');
     } catch (err) {
       console.error('[DashboardGrid] Failed to cleanup grid:', err);
@@ -516,22 +516,12 @@ function cleanupGrid() {
   }
 }
 
-/**
- * Refresh grid layout
- */
-function refreshGrid() {
-  if (gridInstance.value) {
-    gridInstance.value.batchUpdate();
-    gridInstance.value.commit();
-  }
-}
-
 // Watchers
 watch(() => cards.value.length, (newLength, oldLength) => {
-  if (gridInstance.value && newLength !== oldLength) {
-    // Refresh grid when cards change
+  if (gridInstance && newLength !== oldLength) {
+    // Reload cards when collection changes
     nextTick(() => {
-      refreshGrid();
+      loadExistingCards();
     });
   }
 });
@@ -539,9 +529,8 @@ watch(() => cards.value.length, (newLength, oldLength) => {
 watch(() => props.dashboardId, (newId, oldId) => {
   if (newId !== oldId) {
     console.log('[DashboardGrid] Dashboard changed:', newId);
-    // Reload cards for new dashboard
     nextTick(() => {
-      loadCards();
+      loadExistingCards();
     });
   }
 });
@@ -552,7 +541,7 @@ onMounted(async () => {
   
   // Initialize grid after DOM is ready
   await nextTick();
-  initializeGrid();
+  await initializeGrid();
 });
 
 onUnmounted(() => {
@@ -563,7 +552,7 @@ onUnmounted(() => {
     cleanupCard(card.id);
   });
   
-  // Cleanup grid
+  // Cleanup grid - CRUCIAL for proper cleanup
   cleanupGrid();
 });
 
@@ -591,18 +580,6 @@ defineExpose({
   position: relative;
   width: 100%;
   height: 100%;
-}
-
-/* Grid item styling */
-.grid-stack-item {
-  position: absolute;
-}
-
-.grid-stack-item-content {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
 }
 
 /* Disabled state */

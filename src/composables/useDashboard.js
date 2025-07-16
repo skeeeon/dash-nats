@@ -17,7 +17,6 @@ export function useDashboard() {
   // Local reactive state
   const isLoading = ref(false);
   const error = ref(null);
-  const gridContainer = ref(null);
   
   // Dashboard state (from store)
   const dashboards = computed(() => dashboardStore.dashboards);
@@ -26,7 +25,6 @@ export function useDashboard() {
   const hasCards = computed(() => dashboardStore.hasCards);
   const gridOptions = computed(() => dashboardStore.gridOptions);
   const isGridLoaded = computed(() => dashboardStore.isGridLoaded);
-  const gridInstance = computed(() => dashboardStore.gridInstance);
   
   // Dashboard operations
   
@@ -180,16 +178,11 @@ export function useDashboard() {
         config: cardConfig.config || {}
       };
       
-      // Add to dashboard
+      // Add to dashboard store
       const createdCard = dashboardStore.addCard(card);
       
       // Initialize card state
       cardsStore.initializeCard(createdCard.id, createdCard);
-      
-      // Add to grid if grid is loaded
-      if (isGridLoaded.value && gridInstance.value) {
-        await addCardToGrid(createdCard);
-      }
       
       console.log('[useDashboard] Added card:', createdCard);
       return createdCard;
@@ -211,15 +204,10 @@ export function useDashboard() {
       isLoading.value = true;
       error.value = null;
       
-      // Remove from grid if grid is loaded
-      if (isGridLoaded.value && gridInstance.value) {
-        removeCardFromGrid(cardId);
-      }
-      
       // Cleanup card state
       await cardsStore.cleanupCard(cardId);
       
-      // Remove from dashboard
+      // Remove from dashboard store
       const success = dashboardStore.removeCard(cardId);
       
       if (!success) {
@@ -260,40 +248,10 @@ export function useDashboard() {
   // Grid operations
   
   /**
-   * Set grid container reference
-   * @param {HTMLElement} container - Grid container element
-   */
-  function setGridContainer(container) {
-    gridContainer.value = container;
-  }
-  
-  /**
-   * Initialize grid with current dashboard cards
-   */
-  async function initializeGrid() {
-    try {
-      if (!gridContainer.value) {
-        throw new Error('Grid container not set');
-      }
-      
-      // This will be implemented with GridStack integration
-      console.log('[useDashboard] Grid initialization placeholder');
-      
-      // For now, just mark as loaded
-      dashboardStore.setGridInstance({ placeholder: true });
-      
-    } catch (err) {
-      error.value = err.message;
-      console.error('[useDashboard] Failed to initialize grid:', err);
-      throw err;
-    }
-  }
-  
-  /**
-   * Handle grid layout changes
+   * Update grid layout
    * @param {Array} layout - New grid layout
    */
-  function handleGridChange(layout) {
+  function updateGridLayout(layout) {
     try {
       dashboardStore.updateGridLayout(layout);
       console.log('[useDashboard] Grid layout updated');
@@ -304,48 +262,20 @@ export function useDashboard() {
   }
   
   /**
-   * Add card to grid
-   * @param {Object} card - Card to add
+   * Get grid layout for a card
+   * @param {string} cardId - Card ID
+   * @returns {Object|null} Grid layout item or null
    */
-  async function addCardToGrid(card) {
-    try {
-      // Get existing layout or create default
-      const existingLayout = dashboardStore.getCardLayout(card.id);
-      const layout = existingLayout || generateDefaultLayout(card);
-      
-      // Add to grid (placeholder implementation)
-      console.log('[useDashboard] Adding card to grid:', card.id, layout);
-      
-      // Update grid layout
-      const currentLayout = activeDashboard.value.gridLayout;
-      if (!currentLayout.find(item => item.id === card.id)) {
-        currentLayout.push(layout);
-        dashboardStore.updateGridLayout(currentLayout);
-      }
-      
-    } catch (err) {
-      console.error('[useDashboard] Failed to add card to grid:', err);
-      throw err;
-    }
+  function getCardLayout(cardId) {
+    return dashboardStore.getCardLayout(cardId);
   }
   
   /**
-   * Remove card from grid
-   * @param {string} cardId - Card ID
+   * Set grid loaded state
+   * @param {boolean} loaded - Load state
    */
-  function removeCardFromGrid(cardId) {
-    try {
-      console.log('[useDashboard] Removing card from grid:', cardId);
-      
-      // Remove from grid layout
-      const currentLayout = activeDashboard.value.gridLayout;
-      const filtered = currentLayout.filter(item => item.id !== cardId);
-      dashboardStore.updateGridLayout(filtered);
-      
-    } catch (err) {
-      console.error('[useDashboard] Failed to remove card from grid:', err);
-      throw err;
-    }
+  function setGridLoaded(loaded) {
+    dashboardStore.setGridLoaded(loaded);
   }
   
   // Utility functions
@@ -434,68 +364,6 @@ export function useDashboard() {
     return `card-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
   
-  /**
-   * Generate default layout for new card
-   * @param {Object} card - Card configuration
-   * @returns {Object} Default layout
-   */
-  function generateDefaultLayout(card) {
-    const existingLayouts = activeDashboard.value.gridLayout;
-    
-    // Find next available position
-    let x = 0;
-    let y = 0;
-    
-    // Simple placement algorithm - place cards in a row
-    if (existingLayouts.length > 0) {
-      const lastLayout = existingLayouts[existingLayouts.length - 1];
-      x = lastLayout.x + lastLayout.w;
-      y = lastLayout.y;
-      
-      // Wrap to next row if needed
-      if (x + getDefaultWidth(card.type) > 12) {
-        x = 0;
-        y = Math.max(...existingLayouts.map(l => l.y + l.h));
-      }
-    }
-    
-    return {
-      id: card.id,
-      x,
-      y,
-      w: getDefaultWidth(card.type),
-      h: getDefaultHeight(card.type)
-    };
-  }
-  
-  /**
-   * Get default width for card type
-   * @param {string} type - Card type
-   * @returns {number} Default width
-   */
-  function getDefaultWidth(type) {
-    switch (type) {
-      case 'publisher': return 4;
-      case 'subscriber': return 6;
-      case 'chart': return 8;
-      default: return 4;
-    }
-  }
-  
-  /**
-   * Get default height for card type
-   * @param {string} type - Card type
-   * @returns {number} Default height
-   */
-  function getDefaultHeight(type) {
-    switch (type) {
-      case 'publisher': return 2;
-      case 'subscriber': return 4;
-      case 'chart': return 6;
-      default: return 3;
-    }
-  }
-  
   // Lifecycle management
   onMounted(() => {
     console.log('[useDashboard] Dashboard composable mounted');
@@ -522,8 +390,6 @@ export function useDashboard() {
     hasCards,
     gridOptions,
     isGridLoaded,
-    gridInstance,
-    gridContainer,
     isLoading,
     error,
     
@@ -541,11 +407,9 @@ export function useDashboard() {
     getCard,
     
     // Grid operations
-    setGridContainer,
-    initializeGrid,
-    handleGridChange,
-    addCardToGrid,
-    removeCardFromGrid,
+    updateGridLayout,
+    getCardLayout,
+    setGridLoaded,
     
     // Utilities
     exportDashboard,

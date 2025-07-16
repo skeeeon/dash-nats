@@ -11,7 +11,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const dashboards = ref(new Map());
   const activeDashboardId = ref('default');
   const isGridLoaded = ref(false);
-  const gridInstance = ref(null);
   
   // Grid settings
   const gridSettings = ref({
@@ -69,6 +68,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (savedActive && dashboards.value.has(savedActive)) {
       activeDashboardId.value = savedActive;
     }
+    
+    // Set up automatic persistence
+    setupAutoPersistence();
   }
 
   /**
@@ -168,6 +170,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
     dashboard.cards.push(cardWithId);
     dashboard.updatedAt = Date.now();
     
+    // Add default layout if not exists
+    if (!dashboard.gridLayout.find(item => item.id === cardWithId.id)) {
+      const defaultLayout = generateDefaultLayout(cardWithId);
+      dashboard.gridLayout.push(defaultLayout);
+    }
+    
     saveDashboards();
     console.log(`[DashboardStore] Added card: ${cardWithId.id}`);
     
@@ -180,10 +188,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
    */
   function removeCard(cardId) {
     const dashboard = activeDashboard.value;
-    const index = dashboard.cards.findIndex(card => card.id === cardId);
+    const cardIndex = dashboard.cards.findIndex(card => card.id === cardId);
     
-    if (index > -1) {
-      dashboard.cards.splice(index, 1);
+    if (cardIndex > -1) {
+      dashboard.cards.splice(cardIndex, 1);
       dashboard.updatedAt = Date.now();
       
       // Also remove from grid layout
@@ -260,12 +268,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   /**
-   * Set grid instance reference
-   * @param {Object} grid - Gridstack instance
+   * Mark grid as loaded
+   * @param {boolean} loaded - Load state
    */
-  function setGridInstance(grid) {
-    gridInstance.value = grid;
-    isGridLoaded.value = !!grid;
+  function setGridLoaded(loaded) {
+    isGridLoaded.value = loaded;
   }
 
   /**
@@ -316,6 +323,26 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   // Private helper functions
+
+  /**
+   * Setup automatic persistence using store subscription
+   */
+  function setupAutoPersistence() {
+    // Auto-save to localStorage on state changes
+    const unsubscribe = $subscribe((mutation, state) => {
+      // Debounced save to prevent too frequent saves
+      if (setupAutoPersistence.saveTimeout) {
+        clearTimeout(setupAutoPersistence.saveTimeout);
+      }
+      
+      setupAutoPersistence.saveTimeout = setTimeout(() => {
+        saveDashboards();
+      }, 500);
+    });
+    
+    // Store unsubscribe function for cleanup
+    setupAutoPersistence.unsubscribe = unsubscribe;
+  }
 
   /**
    * Load dashboards from storage
@@ -371,13 +398,74 @@ export const useDashboardStore = defineStore('dashboard', () => {
     return `card_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
+  /**
+   * Generate default layout for new card
+   * @param {Object} card - Card configuration
+   * @returns {Object} Default layout
+   */
+  function generateDefaultLayout(card) {
+    const existingLayouts = activeDashboard.value.gridLayout;
+    
+    // Find next available position
+    let x = 0;
+    let y = 0;
+    
+    // Simple placement algorithm - place cards in a row
+    if (existingLayouts.length > 0) {
+      const lastLayout = existingLayouts[existingLayouts.length - 1];
+      x = lastLayout.x + lastLayout.w;
+      y = lastLayout.y;
+      
+      // Wrap to next row if needed
+      if (x + getDefaultWidth(card.type) > 12) {
+        x = 0;
+        y = Math.max(...existingLayouts.map(l => l.y + l.h));
+      }
+    }
+    
+    return {
+      id: card.id,
+      x,
+      y,
+      w: getDefaultWidth(card.type),
+      h: getDefaultHeight(card.type)
+    };
+  }
+
+  /**
+   * Get default width for card type
+   * @param {string} type - Card type
+   * @returns {number} Default width
+   */
+  function getDefaultWidth(type) {
+    switch (type) {
+      case 'publisher': return 4;
+      case 'subscriber': return 6;
+      case 'chart': return 8;
+      default: return 4;
+    }
+  }
+
+  /**
+   * Get default height for card type
+   * @param {string} type - Card type
+   * @returns {number} Default height
+   */
+  function getDefaultHeight(type) {
+    switch (type) {
+      case 'publisher': return 2;
+      case 'subscriber': return 4;
+      case 'chart': return 6;
+      default: return 3;
+    }
+  }
+
   // Return store interface
   return {
     // State
     dashboards,
     activeDashboardId,
     isGridLoaded,
-    gridInstance,
     gridSettings,
     
     // Computed
@@ -397,7 +485,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     updateGridLayout,
     getCard,
     getCardLayout,
-    setGridInstance,
+    setGridLoaded,
     exportDashboard,
     importDashboard
   };
