@@ -3,10 +3,20 @@
     <div class="max-w-4xl mx-auto p-6">
       <!-- Page Header -->
       <div class="mb-8">
-        <h1 class="text-3xl font-bold text-foreground">Connection Settings</h1>
-        <p class="text-muted-foreground mt-2">
-          Configure your NATS server connections and manage connection settings.
-        </p>
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-3xl font-bold text-foreground">Connection Settings</h1>
+            <p class="text-muted-foreground mt-2">
+              Configure your NATS server connections and manage connection settings.
+            </p>
+          </div>
+          <button
+            @click="router.push({ name: 'dashboard' })"
+            class="px-4 py-2 text-sm bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
       </div>
 
       <!-- Current Connection Status -->
@@ -116,7 +126,7 @@
                     </span>
                   </div>
                   <div class="text-sm text-muted-foreground mt-1">
-                    {{ config.servers?.[0] }} • {{ config.authType }}
+                    {{ config.servers?.[0] }} • {{ config.authType === 'userpass' ? 'Username/Password' : config.authType === 'creds' ? 'Credentials File' : 'No Auth' }}
                   </div>
                   <div class="text-xs text-muted-foreground mt-1">
                     Saved {{ formatDate(config.createdAt) }}
@@ -126,16 +136,23 @@
                 <div class="flex items-center gap-2">
                   <button
                     @click="loadConnection(config)"
-                    class="px-3 py-1 text-sm bg-primary text-primary-foreground hover:bg-primary/90 rounded transition-colors"
+                    class="px-3 py-1 text-sm bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded transition-colors"
+                    title="Load this configuration into the form"
                   >
-                    Load
+                    Edit
                   </button>
                   <button
                     @click="quickConnect(config)"
                     :disabled="operationInProgress || isCurrentConnection(config)"
-                    class="px-3 py-1 text-sm border border-input hover:bg-accent rounded transition-colors disabled:opacity-50"
+                    :class="[
+                      'px-3 py-1 text-sm rounded transition-colors disabled:opacity-50',
+                      isCurrentConnection(config) 
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 cursor-not-allowed'
+                        : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    ]"
+                    :title="isCurrentConnection(config) ? 'Currently connected' : 'Quick connect'"
                   >
-                    Connect
+                    {{ isCurrentConnection(config) ? 'Current' : (config.authType === 'userpass' ? 'Connect...' : 'Connect') }}
                   </button>
                   <button
                     @click="deleteConnection(config.id)"
@@ -195,13 +212,93 @@
         </div>
       </div>
     </div>
+    
+    <!-- Password Prompt Modal -->
+    <div
+      v-if="showPasswordPrompt"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      @click.self="cancelPasswordPrompt"
+    >
+      <div class="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold">Enter Password</h3>
+          <button
+            @click="cancelPasswordPrompt"
+            class="p-1 hover:bg-accent rounded"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div class="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md">
+            <div class="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Security Note:</strong> For security reasons, passwords are not stored. Please enter your password to connect.
+            </div>
+          </div>
+          
+          <div>
+            <div class="text-sm text-muted-foreground mb-2">
+              Connection: <span class="font-medium">{{ passwordPrompt.config?.name }}</span>
+            </div>
+            <div class="text-sm text-muted-foreground mb-2">
+              Username: <span class="font-medium">{{ passwordPrompt.config?.username }}</span>
+            </div>
+          </div>
+          
+          <div>
+            <label for="promptPassword" class="block text-sm font-medium text-foreground mb-2">
+              Password
+            </label>
+            <input
+              id="promptPassword"
+              ref="passwordInput"
+              v-model="passwordPrompt.password"
+              type="password"
+              placeholder="Enter your password"
+              @keyup.enter="connectWithPassword"
+              @keyup.escape="cancelPasswordPrompt"
+              class="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+            />
+            <div class="text-xs text-muted-foreground mt-1">
+              Press Enter to connect, Escape to cancel
+            </div>
+          </div>
+          
+          <div class="flex gap-3 pt-4">
+            <button
+              @click="cancelPasswordPrompt"
+              class="flex-1 px-4 py-2 text-sm border border-input rounded-md hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              @click="connectWithPassword"
+              :disabled="!passwordPrompt.password || passwordPrompt.isConnecting"
+              class="flex-1 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              <span v-if="!passwordPrompt.isConnecting">Connect</span>
+              <span v-else class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Connecting...
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useNatsConnection } from '@/composables/useNatsConnection.js';
+import { useToast } from '@/composables/useToast.js';
 import ConnectionConfig from '@/components/connection/ConnectionConfig.vue';
 
 // Composables
@@ -225,11 +322,17 @@ const {
   createDefaultConfig
 } = useNatsConnection();
 
+const { success, error, info, warning } = useToast();
+
 // Local state
 const editingConfig = ref(null);
-const showNotification = ref(false);
-const notificationMessage = ref('');
-const notificationType = ref('info');
+const passwordInput = ref(null);
+const showPasswordPrompt = ref(false);
+const passwordPrompt = ref({
+  config: null,
+  password: '',
+  isConnecting: false
+});
 
 // Computed properties
 
@@ -237,23 +340,23 @@ const notificationType = ref('info');
 async function handleDisconnect() {
   try {
     await disconnect();
-    showToast('Disconnected from NATS server', 'info');
-  } catch (error) {
-    showToast(`Disconnect error: ${error.message}`, 'error');
+    success('Disconnected from NATS server');
+  } catch (err) {
+    error(`Disconnect error: ${err.message}`);
   }
 }
 
 async function handleReconnect() {
   try {
     await reconnect();
-    showToast('Reconnected to NATS server', 'success');
-  } catch (error) {
-    showToast(`Reconnect error: ${error.message}`, 'error');
+    success('Reconnected to NATS server');
+  } catch (err) {
+    error(`Reconnect error: ${err.message}`);
   }
 }
 
 function handleConnected(config) {
-  showToast(`Connected to ${config.servers[0]}`, 'success');
+  success(`Connected to ${config.servers[0]}`);
   
   // Navigate to dashboard after successful connection
   setTimeout(() => {
@@ -263,14 +366,14 @@ function handleConnected(config) {
 
 function handleTestResult(result) {
   if (result.success) {
-    showToast('Connection test successful', 'success');
+    success('Connection test successful');
   } else {
-    showToast(`Connection test failed: ${result.error || 'Unknown error'}`, 'error');
+    error(`Connection test failed: ${result.error || 'Unknown error'}`);
   }
 }
 
 function loadConnection(config) {
-  // Restore sensitive data from the original config if available
+  // Restore the full config (excluding sensitive data for security)
   editingConfig.value = {
     ...config,
     // Note: We don't restore sensitive data here for security
@@ -279,7 +382,7 @@ function loadConnection(config) {
     credsContent: ''
   };
   
-  showToast(`Loaded connection: ${config.name}`, 'info');
+  info(`Loaded connection: ${config.name}`);
 }
 
 async function quickConnect(config) {
@@ -287,20 +390,69 @@ async function quickConnect(config) {
     return;
   }
 
-  try {
-    // For quick connect, we need the full config with credentials
-    // This is a limitation - we'd need to store encrypted credentials for this to work
-    showToast('Please load the connection and enter credentials to connect', 'warning');
-    loadConnection(config);
-  } catch (error) {
-    showToast(`Quick connect failed: ${error.message}`, 'error');
+  // For username/password auth, we need to prompt for password
+  if (config.authType === 'userpass') {
+    showPasswordPrompt.value = true;
+    passwordPrompt.value.config = config;
+    passwordPrompt.value.password = '';
+    
+    // Focus the password input after the modal opens
+    await nextTick();
+    passwordInput.value?.focus();
+    return;
   }
+  
+  // For creds auth, we need the user to load and enter credentials
+  if (config.authType === 'creds') {
+    warning('Please edit the connection and enter your credentials file content');
+    loadConnection(config);
+    return;
+  }
+
+  // For no auth, connect directly
+  try {
+    await connect(config);
+    success(`Connected to ${config.name}`);
+  } catch (err) {
+    error(`Quick connect failed: ${err.message}`);
+  }
+}
+
+async function connectWithPassword() {
+  if (!passwordPrompt.value.config || !passwordPrompt.value.password) {
+    return;
+  }
+
+  try {
+    passwordPrompt.value.isConnecting = true;
+    
+    const connectConfig = {
+      ...passwordPrompt.value.config,
+      password: passwordPrompt.value.password
+    };
+    
+    await connect(connectConfig);
+    success(`Connected to ${passwordPrompt.value.config.name}`);
+    
+    // Close prompt
+    showPasswordPrompt.value = false;
+    passwordPrompt.value = { config: null, password: '', isConnecting: false };
+  } catch (err) {
+    error(`Connection failed: ${err.message}`);
+  } finally {
+    passwordPrompt.value.isConnecting = false;
+  }
+}
+
+function cancelPasswordPrompt() {
+  showPasswordPrompt.value = false;
+  passwordPrompt.value = { config: null, password: '', isConnecting: false };
 }
 
 function deleteConnection(configId) {
   if (confirm('Are you sure you want to delete this saved connection?')) {
     removeSavedConfig(configId);
-    showToast('Connection deleted', 'info');
+    info('Connection deleted');
   }
 }
 
@@ -322,20 +474,6 @@ function formatDate(timestamp) {
     hour: '2-digit', 
     minute: '2-digit' 
   });
-}
-
-function showToast(message, type = 'info') {
-  notificationMessage.value = message;
-  notificationType.value = type;
-  showNotification.value = true;
-  
-  // Auto-hide after 3 seconds
-  setTimeout(() => {
-    showNotification.value = false;
-  }, 3000);
-  
-  // Simple console log for Phase 1 (will be replaced with proper toast system)
-  console.log(`[Toast ${type}]: ${message}`);
 }
 
 // Lifecycle

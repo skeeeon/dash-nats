@@ -3,10 +3,20 @@
     <div class="max-w-3xl mx-auto p-6">
       <!-- Page Header -->
       <div class="mb-8">
-        <h1 class="text-3xl font-bold text-foreground">Settings</h1>
-        <p class="text-muted-foreground mt-2">
-          Customize your dashboard preferences and application settings.
-        </p>
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-3xl font-bold text-foreground">Settings</h1>
+            <p class="text-muted-foreground mt-2">
+              Customize your dashboard preferences and application settings.
+            </p>
+          </div>
+          <button
+            @click="router.push({ name: 'dashboard' })"
+            class="px-4 py-2 text-sm bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
       </div>
 
       <div class="space-y-8">
@@ -265,8 +275,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import storageService from '@/services/StorageService.js';
+import { useToast } from '@/composables/useToast.js';
+
+// Composables
+const router = useRouter();
+const { success, error, info } = useToast();
 
 // Local state
 const preferences = ref({
@@ -354,7 +370,7 @@ function exportSettings() {
   try {
     const config = storageService.exportConfig();
     if (!config) {
-      alert('No data to export');
+      error('No data to export');
       return;
     }
     
@@ -370,10 +386,10 @@ function exportSettings() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
-    console.log('Settings exported successfully');
-  } catch (error) {
-    console.error('Export failed:', error);
-    alert('Failed to export settings');
+    success('Settings exported successfully');
+  } catch (err) {
+    console.error('Export failed:', err);
+    error('Failed to export settings');
   }
 }
 
@@ -390,18 +406,18 @@ function importSettings() {
     reader.onload = (e) => {
       try {
         const config = JSON.parse(e.target.result);
-        const success = storageService.importConfig(config);
+        const result = storageService.importConfig(config);
         
-        if (success) {
-          alert('Settings imported successfully. Refresh the page to see changes.');
+        if (result) {
+          success('Settings imported successfully. Refresh the page to see changes.');
           loadPreferences();
           loadStorageInfo();
         } else {
-          alert('Failed to import settings');
+          error('Failed to import settings');
         }
-      } catch (error) {
-        console.error('Import failed:', error);
-        alert('Invalid configuration file');
+      } catch (err) {
+        console.error('Import failed:', err);
+        error('Invalid configuration file');
       }
     };
     reader.readAsText(file);
@@ -415,8 +431,7 @@ function clearDashboards() {
     storageService.removeItem(storageService.KEYS.DASHBOARD_CONFIG);
     storageService.removeItem(storageService.KEYS.CARD_CONFIGS);
     loadStorageInfo();
-    console.log('Dashboard configurations cleared');
-    alert('Dashboard configurations cleared');
+    success('Dashboard configurations cleared');
   }
 }
 
@@ -424,8 +439,7 @@ function clearAllData() {
   if (confirm('Are you sure you want to clear ALL data? This will remove all settings, connections, and dashboards. This cannot be undone.')) {
     storageService.clearAll();
     loadStorageInfo();
-    console.log('All data cleared');
-    alert('All data cleared. The page will refresh.');
+    info('All data cleared. The page will refresh.');
     
     // Refresh page after clearing data
     setTimeout(() => {

@@ -341,6 +341,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { useNatsConnection } from '@/composables/useNatsConnection.js';
+import { useToast } from '@/composables/useToast.js';
 
 // Props
 const props = defineProps({
@@ -364,6 +365,8 @@ const {
   validateConfig,
   isConnecting
 } = useNatsConnection();
+
+const { success, error, info, loading, update } = useToast();
 
 // Local state
 const form = ref(createDefaultConfig());
@@ -427,11 +430,15 @@ async function handleSubmit() {
     return;
   }
 
+  const loadingToast = loading('Connecting to NATS server...');
+
   try {
     await connect(form.value);
+    update(loadingToast, 'Successfully connected to NATS server!', 'success');
     emit('connected', form.value);
-  } catch (error) {
-    setFieldError('general', error.message);
+  } catch (err) {
+    update(loadingToast, `Connection failed: ${err.message}`, 'error');
+    setFieldError('general', err.message);
   }
 }
 
@@ -440,21 +447,24 @@ async function handleTest() {
     return;
   }
 
+  const loadingToast = loading('Testing connection...');
+
   try {
     isTesting.value = true;
     const result = await testConnection(form.value);
     
-    emit('test-result', { success: result, config: form.value });
-    
     if (result) {
-      // Show success feedback
-      console.log('Connection test successful');
+      update(loadingToast, 'Connection test successful!', 'success');
+      emit('test-result', { success: true, config: form.value });
     } else {
+      update(loadingToast, 'Connection test failed', 'error');
       setFieldError('general', 'Connection test failed');
+      emit('test-result', { success: false, config: form.value });
     }
-  } catch (error) {
-    setFieldError('general', `Test failed: ${error.message}`);
-    emit('test-result', { success: false, error: error.message, config: form.value });
+  } catch (err) {
+    update(loadingToast, `Test failed: ${err.message}`, 'error');
+    setFieldError('general', `Test failed: ${err.message}`);
+    emit('test-result', { success: false, error: err.message, config: form.value });
   } finally {
     isTesting.value = false;
   }

@@ -4,10 +4,9 @@
     <div class="flex-shrink-0 p-6 border-b border-border bg-background/95 backdrop-blur">
       <div class="flex items-center justify-between">
         <div>
-          <h1 class="text-2xl font-bold text-foreground">{{ dashboardTitle }}</h1>
-          <p class="text-muted-foreground mt-1">
+          <div class="text-muted-foreground text-sm mb-1">
             {{ isConnected ? 'Configure cards to start publishing and subscribing' : 'Connect to NATS to begin' }}
-          </p>
+          </div>
         </div>
         
         <div class="flex items-center gap-3">

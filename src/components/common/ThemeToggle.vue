@@ -49,7 +49,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import storageService from '@/services/StorageService.js';
 
 // Emits

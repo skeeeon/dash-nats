@@ -44,7 +44,7 @@
         
         <!-- Desktop collapse toggle -->
         <button
-          v-if="!isMobile"
+          v-if="!isMobile && !isCollapsed"
           @click="$emit('toggle')"
           class="p-1.5 hover:bg-accent rounded-md transition-colors"
           :title="isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
@@ -63,6 +63,19 @@
       
       <!-- Navigation Menu -->
       <nav class="flex-1 p-4 space-y-2">
+        <!-- Collapse toggle for collapsed state -->
+        <div v-if="isCollapsed && !isMobile" class="flex justify-center mb-4">
+          <button
+            @click="$emit('toggle')"
+            class="p-2 hover:bg-accent rounded-md transition-colors"
+            title="Expand sidebar"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+        
         <!-- Dashboard Link -->
         <SidebarItem
           :to="{ name: 'dashboard' }"
@@ -71,34 +84,6 @@
           :collapsed="isCollapsed"
           @click="handleNavigate({ name: 'dashboard' })"
         />
-        
-        <!-- Connections Section -->
-        <div class="py-2">
-          <SidebarSection
-            :title="'Connection'"
-            :collapsed="isCollapsed"
-          />
-          
-          <div class="space-y-1 mt-2">
-            <SidebarItem
-              :icon="ConnectionIcon"
-              :label="connectionStatusText"
-              :collapsed="isCollapsed"
-              :status="connectionStatus"
-              @click="handleConnectionClick"
-              class="cursor-pointer"
-            />
-            
-            <SidebarItem
-              :to="{ name: 'connections' }"
-              :icon="SettingsIcon"
-              :label="'Settings'"
-              :collapsed="isCollapsed"
-              @click="handleNavigate({ name: 'connections' })"
-              v-if="!isCollapsed || !isMobile"
-            />
-          </div>
-        </div>
         
         <!-- Dashboards Section -->
         <div class="py-2" v-if="dashboards.length > 0">
@@ -122,25 +107,12 @@
       
       <!-- Footer -->
       <div class="p-4 border-t border-border">
-        <!-- Connection Status Summary -->
-        <div v-if="!isCollapsed" class="mb-3">
-          <div class="text-xs text-muted-foreground mb-1">Connection Status</div>
-          <div class="flex items-center gap-2 text-sm">
-            <div 
-              :class="[
-                'w-2 h-2 rounded-full',
-                connectionStatus === 'connected' ? 'bg-green-500' :
-                connectionStatus === 'connecting' ? 'bg-yellow-500' :
-                connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-              ]"
-            />
-            <span class="capitalize">{{ connectionStatus }}</span>
-          </div>
-          
-          <!-- Stats (when connected) -->
-          <div v-if="connectionStatus === 'connected' && connectionStats" class="mt-2 text-xs text-muted-foreground">
-            <div>Messages: {{ connectionStats.totalMessages || 0 }}</div>
-            <div>Subscriptions: {{ connectionStats.subscriptionsCount || 0 }}</div>
+        <!-- Connection Status Summary (when not collapsed and connected) -->
+        <div v-if="!isCollapsed && connectionStats && connectionStatus === 'connected' && (connectionStats.totalMessages > 0 || connectionStats.subscriptionsCount > 0)" class="mb-3">
+          <div class="text-xs text-muted-foreground mb-2">Activity</div>
+          <div class="text-xs text-muted-foreground space-y-1">
+            <div v-if="connectionStats.totalMessages > 0">Messages: {{ connectionStats.totalMessages }}</div>
+            <div v-if="connectionStats.subscriptionsCount > 0">Subscriptions: {{ connectionStats.subscriptionsCount }}</div>
           </div>
         </div>
         
@@ -179,9 +151,7 @@ const emit = defineEmits(['toggle', 'navigate']);
 const route = useRoute();
 const { 
   connectionStatus, 
-  connectionStatusText, 
-  connectionStats,
-  isConnected 
+  connectionStats
 } = useNatsConnection();
 
 // Computed properties
@@ -201,16 +171,6 @@ const dashboards = computed(() => [
 // Methods
 function handleNavigate(routeInfo) {
   emit('navigate', routeInfo);
-}
-
-function handleConnectionClick() {
-  if (isConnected.value) {
-    // If connected, show connection details
-    handleNavigate({ name: 'connections' });
-  } else {
-    // If not connected, show connection setup
-    handleNavigate({ name: 'connections' });
-  }
 }
 
 // Icon components (simple SVG icons)

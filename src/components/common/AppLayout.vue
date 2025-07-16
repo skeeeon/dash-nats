@@ -30,9 +30,33 @@
             </h1>
           </div>
           
-          <!-- Right side - connection status and theme toggle -->
+          <!-- Right side - connection button and theme toggle -->
           <div class="flex items-center gap-3">
-            <ConnectionStatus />
+            <!-- Connection Button -->
+            <button
+              @click="router.push({ name: 'connections' })"
+              :class="[
+                'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200',
+                isOnline && isConnected 
+                  ? 'bg-green-100 text-green-700 hover:bg-green-200 border border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 dark:border-green-800'
+                  : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border border-yellow-300 dark:bg-yellow-900/30 dark:text-yellow-400 dark:hover:bg-yellow-900/50 dark:border-yellow-800 animate-pulse'
+              ]"
+              :title="isConnected ? 'Connection Settings' : 'Connect to NATS'"
+            >
+              <div 
+                :class="[
+                  'w-2 h-2 rounded-full',
+                  isConnected ? 'bg-green-500' : 'bg-yellow-500'
+                ]"
+              />
+              <span class="hidden sm:inline">
+                {{ isConnected ? 'Connected' : 'Not Connected' }}
+              </span>
+              <span class="sm:hidden">
+                {{ isConnected ? '✓' : '!' }}
+              </span>
+            </button>
+            
             <ThemeToggle />
           </div>
         </div>
@@ -49,9 +73,7 @@
       </main>
       
       <!-- Toast Container -->
-      <div id="toast-container" class="fixed bottom-0 right-0 p-6 pointer-events-none z-50">
-        <!-- Toasts will be rendered here -->
-      </div>
+      <ToastContainer />
     </div>
     
     <!-- Mobile Sidebar Overlay -->
@@ -68,9 +90,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useNatsConnection } from '@/composables/useNatsConnection.js';
 import AppSidebar from './AppSidebar.vue';
-import ConnectionStatus from '../connection/ConnectionStatus.vue';
 import OfflineBanner from '../connection/OfflineBanner.vue';
 import ThemeToggle from './ThemeToggle.vue';
+import ToastContainer from './ToastContainer.vue';
 
 // Props
 const props = defineProps({
@@ -86,7 +108,7 @@ const props = defineProps({
 // Composables
 const route = useRoute();
 const router = useRouter();
-const { isOnline } = useNatsConnection();
+const { isOnline, isConnected } = useNatsConnection();
 
 // Local state
 const sidebarCollapsed = ref(null); // null = auto, true = collapsed, false = expanded
