@@ -1,16 +1,37 @@
 <template>
   <div 
     :class="[
-      'card-wrapper relative transition-all duration-200',
+      'card-wrapper relative transition-all duration-200 h-full w-full',
       'hover:z-10',
       isSelected ? 'z-20' : ''
     ]"
     :data-card-id="card.id"
     @click="handleCardClick"
   >
-    <!-- Card Component -->
+    <!-- Loading state while component loads -->
+    <div v-if="isLoadingComponent" class="flex items-center justify-center h-full">
+      <div class="text-center">
+        <svg class="w-8 h-8 animate-spin mx-auto mb-2 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span class="text-sm text-muted-foreground">Loading...</span>
+      </div>
+    </div>
+
+    <!-- Error state if component fails to load -->
+    <div v-else-if="componentError" class="flex items-center justify-center h-full">
+      <div class="text-center text-red-500">
+        <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span class="text-sm">Failed to load card</span>
+      </div>
+    </div>
+
+    <!-- Actual Card Component -->
     <component 
-      :is="cardComponent"
+      v-else-if="resolvedComponent"
+      :is="resolvedComponent"
       :card-id="card.id"
       :title="card.title"
       :type="card.type"
@@ -20,6 +41,7 @@
       :loading-text="loadingText"
       :is-active="isSelected"
       :draggable="draggable"
+      :resizable="resizable"
       :show-status-text="showStatusText"
       :allow-title-edit="allowTitleEdit"
       :config="card.config"
@@ -33,6 +55,16 @@
         <slot :name="slot" v-bind="scope" />
       </template>
     </component>
+    
+    <!-- Fallback for unknown card types -->
+    <div v-else class="flex items-center justify-center h-full">
+      <div class="text-center text-muted-foreground">
+        <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <span class="text-sm">Unknown card type: {{ card.type }}</span>
+      </div>
+    </div>
     
     <!-- Resize Handle (for grid integration) -->
     <div 
@@ -55,46 +87,26 @@
       class="selection-indicator absolute inset-0 pointer-events-none rounded-lg"
       :class="selectionIndicatorClasses"
     />
-    
-    <!-- Card Configuration Modal -->
-    <div 
-      v-if="showConfigModal"
-      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      @click.self="closeConfigModal"
-    >
-      <div class="bg-background border border-border rounded-lg max-w-2xl w-full mx-4 max-h-[90vh] overflow-hidden">
-        <div class="flex items-center justify-between p-4 border-b border-border">
-          <h3 class="text-lg font-semibold">Configure {{ card.title }}</h3>
-          <button
-            @click="closeConfigModal"
-            class="p-1 hover:bg-accent rounded-md transition-colors"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        
-        <div class="p-4 overflow-y-auto">
-          <!-- Configuration content will be provided by specific card types -->
-          <slot name="configuration" :card="card" :close="closeConfigModal" />
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useCards } from '@/composables/useCards.js';
 import { useDashboard } from '@/composables/useDashboard.js';
 
-// Dynamic component imports
+// Import components directly (not dynamically)
+import PublisherCard from './PublisherCard.vue';
+import SubscriberCard from './SubscriberCard.vue';
+import ChartCard from './ChartCard.vue';
+import BaseCard from './BaseCard.vue';
+
+// Component registry
 const cardComponents = {
-  publisher: () => import('./PublisherCard.vue'),
-  subscriber: () => import('./SubscriberCard.vue'),
-  chart: () => import('./ChartCard.vue'),
-  default: () => import('./BaseCard.vue')
+  publisher: PublisherCard,
+  subscriber: SubscriberCard,
+  chart: ChartCard,
+  default: BaseCard
 };
 
 // Props
@@ -164,19 +176,16 @@ const { getCardState, updateCard, cleanupCard } = useCards();
 const { removeCard } = useDashboard();
 
 // Local state
-const showConfigModal = ref(false);
 const isLoading = ref(false);
 const loadingText = ref('Loading...');
 const resizeStartPos = ref({ x: 0, y: 0 });
 const resizeStartSize = ref({ width: 0, height: 0 });
+const isLoadingComponent = ref(false);
+const componentError = ref(null);
+const resolvedComponent = ref(null);
 
 // Computed properties
 const cardState = computed(() => getCardState(props.card.id));
-
-const cardComponent = computed(() => {
-  const type = props.card.type || 'default';
-  return cardComponents[type] || cardComponents.default;
-});
 
 const resizeHandleClasses = computed(() => [
   'flex items-center justify-center',
@@ -190,6 +199,34 @@ const selectionIndicatorClasses = computed(() => [
   'bg-primary/5',
   'animate-pulse'
 ]);
+
+// Component resolution
+async function resolveComponent() {
+  try {
+    isLoadingComponent.value = true;
+    componentError.value = null;
+    
+    const cardType = props.card.type || 'default';
+    const component = cardComponents[cardType] || cardComponents.default;
+    
+    // If it's already a component, use it directly
+    if (component && typeof component === 'object') {
+      resolvedComponent.value = component;
+    } else {
+      // If it's a function (dynamic import), await it
+      const resolved = await component();
+      resolvedComponent.value = resolved.default || resolved;
+    }
+    
+    console.log(`[CardWrapper] Resolved component for type: ${cardType}`);
+  } catch (error) {
+    console.error(`[CardWrapper] Failed to resolve component for type: ${props.card.type}`, error);
+    componentError.value = error;
+    resolvedComponent.value = cardComponents.default;
+  } finally {
+    isLoadingComponent.value = false;
+  }
+}
 
 // Methods
 function handleCardClick(event) {
@@ -212,11 +249,7 @@ function handleRemove() {
 }
 
 function handleConfigure() {
-  showConfigModal.value = true;
-}
-
-function closeConfigModal() {
-  showConfigModal.value = false;
+  console.log(`[CardWrapper] Configure card: ${props.card.id}`);
 }
 
 // Resize handling
@@ -279,48 +312,19 @@ function handleResizeEnd() {
   });
 }
 
-// Keyboard shortcuts
-function handleKeyDown(event) {
-  if (!props.isSelected) return;
-  
-  switch (event.key) {
-    case 'Delete':
-    case 'Backspace':
-      if (event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA') {
-        event.preventDefault();
-        handleRemove();
-      }
-      break;
-      
-    case 'Escape':
-      if (showConfigModal.value) {
-        closeConfigModal();
-      } else {
-        emit('deselect');
-      }
-      break;
-      
-    case 'Enter':
-      if (event.ctrlKey || event.metaKey) {
-        handleConfigure();
-      }
-      break;
-  }
-}
+// Watch for card type changes
+watch(() => props.card.type, () => {
+  resolveComponent();
+});
 
 // Lifecycle
 onMounted(() => {
   console.log(`[CardWrapper] Mounted card wrapper: ${props.card.id}`);
-  
-  // Add keyboard event listener
-  document.addEventListener('keydown', handleKeyDown);
+  resolveComponent();
 });
 
 onUnmounted(() => {
   console.log(`[CardWrapper] Unmounted card wrapper: ${props.card.id}`);
-  
-  // Remove keyboard event listener
-  document.removeEventListener('keydown', handleKeyDown);
   
   // Clean up resize event listeners if they exist
   document.removeEventListener('mousemove', handleResizeMove);
@@ -337,6 +341,7 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 /* Resize handle positioning */
@@ -350,23 +355,6 @@ onUnmounted(() => {
   z-index: 10;
 }
 
-.resize-handle::before {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 8px;
-  height: 8px;
-  background: linear-gradient(
-    135deg,
-    transparent 0%,
-    transparent 40%,
-    currentColor 40%,
-    currentColor 60%,
-    transparent 60%
-  );
-}
-
 /* Selection indicator */
 .selection-indicator {
   position: absolute;
@@ -378,44 +366,23 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* Hover effects */
-.card-wrapper:hover {
-  z-index: 10;
+/* Loading spinner */
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
-.card-wrapper:hover .resize-handle {
-  opacity: 1;
-}
-
-/* Transitions */
-.transition-all {
-  transition: all 0.2s ease-in-out;
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Pulse animation for selection */
 @keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-/* Modal backdrop */
-.fixed.inset-0.bg-black\/50 {
-  backdrop-filter: blur(2px);
-}
-
-/* Prevent text selection during resize */
-.no-select {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
 }
 </style>

@@ -11,7 +11,7 @@
     
     <!-- Empty State -->
     <div 
-      v-if="!hasCards"
+      v-if="!hasCards && !isLoading"
       class="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
     >
       <div class="text-center max-w-md">
@@ -34,6 +34,19 @@
       </div>
     </div>
     
+    <!-- Loading State -->
+    <div 
+      v-if="isLoading"
+      class="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm z-20"
+    >
+      <div class="text-center">
+        <svg class="w-8 h-8 animate-spin mx-auto mb-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <p class="text-sm text-muted-foreground">{{ loadingMessage }}</p>
+      </div>
+    </div>
+    
     <!-- Grid Overlay (for drag operations) -->
     <div 
       v-if="isDragging"
@@ -43,12 +56,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, createApp } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { GridStack } from 'gridstack';
 import { useDashboardStore } from '@/stores/dashboard.js';
 import { useNatsConnection } from '@/composables/useNatsConnection.js';
 import { useToast } from '@/composables/useToast.js';
-import CardWrapper from '@/components/cards/CardWrapper.vue';
 
 // Import GridStack CSS
 import 'gridstack/dist/gridstack.min.css';
@@ -81,16 +93,18 @@ const dashboardStore = useDashboardStore();
 const { isConnected } = useNatsConnection();
 const { success, error } = useToast();
 
-// Local state - NOT reactive to avoid conflicts with GridStack
+// Local state
 const gridContainer = ref(null);
 const selectedCardId = ref(null);
 const isDragging = ref(false);
-
-// Store Vue app instances for each widget
-const widgetApps = new Map();
+const isLoading = ref(false);
+const loadingMessage = ref('Loading...');
 
 // GridStack instance - NOT reactive
 let gridInstance = null;
+
+// Track Vue component instances for cleanup
+const componentInstances = new Map();
 
 // Computed properties
 const activeDashboard = computed(() => dashboardStore.activeDashboard);
@@ -119,7 +133,7 @@ const defaultGridOptions = computed(() => ({
     handles: 'e, se, s, sw, w'
   },
   draggable: {
-    handle: '.card-drag-handle'
+    handle: '.card-drag-handle, .card-header'
   },
   acceptWidgets: false,
   alwaysShowResizeHandle: false,
@@ -132,7 +146,7 @@ const defaultGridOptions = computed(() => ({
 /**
  * Initialize the GridStack instance
  */
-function initializeGrid() {
+async function initializeGrid() {
   if (!gridContainer.value) {
     console.warn('[DashboardGrid] Grid container not available');
     return;
@@ -140,6 +154,8 @@ function initializeGrid() {
   
   try {
     console.log('[DashboardGrid] Initializing GridStack...');
+    isLoading.value = true;
+    loadingMessage.value = 'Initializing dashboard...';
     
     // Initialize GridStack
     gridInstance = GridStack.init(defaultGridOptions.value, gridContainer.value);
@@ -148,12 +164,15 @@ function initializeGrid() {
     setupGridEventListeners();
     
     // Load existing widgets
-    loadWidgets();
+    await loadWidgets();
     
     console.log('[DashboardGrid] GridStack initialized successfully');
+    
   } catch (err) {
     console.error('[DashboardGrid] Failed to initialize GridStack:', err);
     error('Failed to initialize dashboard grid');
+  } finally {
+    isLoading.value = false;
   }
 }
 
@@ -196,51 +215,93 @@ function setupGridEventListeners() {
       updateLayout();
     }
   });
+  
+  // Added/removed events
+  gridInstance.on('added', (event, items) => {
+    console.log('[DashboardGrid] Items added:', items.length);
+  });
+  
+  gridInstance.on('removed', (event, items) => {
+    console.log('[DashboardGrid] Items removed:', items.length);
+  });
 }
 
 /**
  * Load existing widgets into the grid
  */
-function loadWidgets() {
+async function loadWidgets() {
   if (!gridInstance) return;
   
   console.log('[DashboardGrid] Loading widgets:', cards.value.length);
   
-  // Clear existing widgets
-  gridInstance.removeAll();
-  
-  // Load widgets from store
-  gridInstance.batchUpdate();
-  
-  cards.value.forEach(card => {
-    const layout = gridLayout.value.find(l => l.id === card.id);
-    const widgetEl = gridInstance.addWidget({
-      x: layout?.x || 0,
-      y: layout?.y || 0,
-      w: layout?.w || getDefaultWidth(card.type),
-      h: layout?.h || getDefaultHeight(card.type),
-      id: card.id,
-    });
+  try {
+    isLoading.value = true;
+    loadingMessage.value = 'Loading cards...';
     
-    // Render Vue component in the widget
-    renderVueComponent(widgetEl, card);
-  });
-  
-  gridInstance.commit();
-  
-  console.log('[DashboardGrid] Loaded', cards.value.length, 'widgets');
+    // Clear existing widgets
+    gridInstance.removeAll();
+    
+    // Clean up old component instances
+    componentInstances.forEach(({ app }) => {
+      try {
+        app.unmount();
+      } catch (err) {
+        console.warn('[DashboardGrid] Error unmounting component:', err);
+      }
+    });
+    componentInstances.clear();
+    
+    // Load widgets from store
+    gridInstance.batchUpdate();
+    
+    for (const card of cards.value) {
+      const layout = gridLayout.value.find(l => l.id === card.id);
+      
+      const widgetEl = gridInstance.addWidget({
+        x: layout?.x || 0,
+        y: layout?.y || 0,
+        w: layout?.w || getDefaultWidth(card.type),
+        h: layout?.h || getDefaultHeight(card.type),
+        id: card.id,
+        content: '' // Empty content - we'll mount Vue component
+      });
+      
+      // Add the card-drag-handle class to the content area
+      const contentEl = widgetEl.querySelector('.grid-stack-item-content');
+      if (contentEl) {
+        contentEl.classList.add('card-drag-handle');
+      }
+      
+      // Render Vue component in the widget
+      await renderVueComponent(widgetEl, card);
+    }
+    
+    gridInstance.commit();
+    
+    console.log('[DashboardGrid] Loaded', cards.value.length, 'widgets');
+    
+  } catch (err) {
+    console.error('[DashboardGrid] Error loading widgets:', err);
+    error('Failed to load dashboard cards');
+  } finally {
+    isLoading.value = false;
+  }
 }
 
 /**
  * Render Vue component into GridStack widget
  */
-function renderVueComponent(widgetEl, card) {
+async function renderVueComponent(widgetEl, card) {
   if (!widgetEl) return;
   
   const contentEl = widgetEl.querySelector('.grid-stack-item-content');
   if (!contentEl) return;
   
   try {
+    // Dynamic import to avoid circular dependencies
+    const { createApp } = await import('vue');
+    const CardWrapper = (await import('@/components/cards/CardWrapper.vue')).default;
+    
     // Create Vue app instance for this widget
     const app = createApp(CardWrapper, {
       card,
@@ -269,48 +330,81 @@ function renderVueComponent(widgetEl, card) {
     app.mount(contentEl);
     
     // Store the app instance for cleanup
-    widgetApps.set(card.id, app);
+    componentInstances.set(card.id, { app, element: widgetEl });
     
     console.log('[DashboardGrid] Rendered component for card:', card.id);
+    
   } catch (err) {
     console.error('[DashboardGrid] Failed to render component for card:', card.id, err);
+    
+    // Show error in the widget
+    const contentEl = widgetEl.querySelector('.grid-stack-item-content');
+    if (contentEl) {
+      contentEl.innerHTML = `
+        <div class="flex items-center justify-center h-full text-red-500">
+          <div class="text-center">
+            <svg class="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-sm">Error loading card</span>
+          </div>
+        </div>
+      `;
+    }
   }
 }
 
 /**
  * Add a new widget to the grid
  */
-function addWidget(card) {
+async function addWidget(card) {
   if (!gridInstance) {
     console.warn('[DashboardGrid] Cannot add widget: GridStack not initialized');
     return;
   }
   
   try {
+    isLoading.value = true;
+    loadingMessage.value = 'Adding card...';
+    
     const widgetEl = gridInstance.addWidget({
       x: 0,
       y: 0,
       w: getDefaultWidth(card.type),
       h: getDefaultHeight(card.type),
       id: card.id,
+      content: ''
     });
     
-    renderVueComponent(widgetEl, card);
+    // Add the card-drag-handle class
+    const contentEl = widgetEl.querySelector('.grid-stack-item-content');
+    if (contentEl) {
+      contentEl.classList.add('card-drag-handle');
+    }
+    
+    await renderVueComponent(widgetEl, card);
     
     console.log('[DashboardGrid] Added widget:', card.id);
     emit('card-added', card);
+    
   } catch (err) {
     console.error('[DashboardGrid] Failed to add widget:', card.id, err);
+    error('Failed to add card to dashboard');
+  } finally {
+    isLoading.value = false;
   }
 }
 
 /**
  * Remove a widget from the grid
  */
-function removeWidget(cardId) {
+async function removeWidget(cardId) {
   if (!gridInstance) return;
   
   try {
+    isLoading.value = true;
+    loadingMessage.value = 'Removing card...';
+    
     // Find the widget element
     const widgetEl = gridInstance.engine.nodes.find(n => n.id === cardId)?.el;
     if (widgetEl) {
@@ -318,10 +412,14 @@ function removeWidget(cardId) {
     }
     
     // Cleanup Vue app
-    const app = widgetApps.get(cardId);
-    if (app) {
-      app.unmount();
-      widgetApps.delete(cardId);
+    const instance = componentInstances.get(cardId);
+    if (instance) {
+      try {
+        instance.app.unmount();
+      } catch (err) {
+        console.warn('[DashboardGrid] Error unmounting component:', err);
+      }
+      componentInstances.delete(cardId);
     }
     
     // Remove from store
@@ -329,8 +427,12 @@ function removeWidget(cardId) {
     
     console.log('[DashboardGrid] Removed widget:', cardId);
     emit('card-removed', cardId);
+    
   } catch (err) {
     console.error('[DashboardGrid] Failed to remove widget:', cardId, err);
+    error('Failed to remove card from dashboard');
+  } finally {
+    isLoading.value = false;
   }
 }
 
@@ -385,11 +487,10 @@ function getDefaultHeight(type) {
 /**
  * Refresh the grid layout
  */
-function refreshGrid() {
+async function refreshGrid() {
   if (gridInstance) {
-    nextTick(() => {
-      loadWidgets();
-    });
+    await nextTick();
+    await loadWidgets();
   }
 }
 
@@ -400,10 +501,14 @@ function cleanup() {
   if (gridInstance) {
     try {
       // Cleanup all Vue apps
-      widgetApps.forEach((app) => {
-        app.unmount();
+      componentInstances.forEach(({ app }) => {
+        try {
+          app.unmount();
+        } catch (err) {
+          console.warn('[DashboardGrid] Error unmounting component:', err);
+        }
       });
-      widgetApps.clear();
+      componentInstances.clear();
       
       // Destroy GridStack
       gridInstance.destroy();
@@ -417,19 +522,19 @@ function cleanup() {
 }
 
 // Watchers
-watch(() => cards.value.length, (newLength, oldLength) => {
+watch(() => cards.value.length, async (newLength, oldLength) => {
   if (gridInstance && newLength !== oldLength) {
-    nextTick(() => {
-      loadWidgets();
-    });
+    console.log('[DashboardGrid] Cards changed, reloading widgets');
+    await nextTick();
+    await loadWidgets();
   }
 });
 
-watch(() => activeDashboard.value.id, (newId, oldId) => {
+watch(() => activeDashboard.value.id, async (newId, oldId) => {
   if (newId !== oldId && gridInstance) {
-    nextTick(() => {
-      loadWidgets();
-    });
+    console.log('[DashboardGrid] Dashboard changed, reloading widgets');
+    await nextTick();
+    await loadWidgets();
   }
 });
 
@@ -437,7 +542,7 @@ watch(() => activeDashboard.value.id, (newId, oldId) => {
 onMounted(async () => {
   console.log('[DashboardGrid] Mounting dashboard grid');
   await nextTick();
-  initializeGrid();
+  await initializeGrid();
 });
 
 onUnmounted(() => {
@@ -508,6 +613,7 @@ defineExpose({
   overflow: hidden;
   height: 100%;
   width: 100%;
+  cursor: move;
 }
 
 /* Resize handle styling */
@@ -541,5 +647,15 @@ defineExpose({
   z-index: 1000;
   transform: scale(1.02);
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Loading animation */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

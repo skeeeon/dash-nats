@@ -21,9 +21,15 @@
             v-if="isConnected"
             @click="showAddCard = true"
             :disabled="isDashboardLoading"
-            class="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors font-medium disabled:opacity-50"
+            class="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            + Add Card
+            <span v-if="!isDashboardLoading">+ Add Card</span>
+            <span v-else class="flex items-center gap-2">
+              <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Adding...
+            </span>
           </button>
           
           <!-- Dashboard Actions -->
@@ -46,13 +52,15 @@
             >
               <button
                 @click="clearDashboard"
-                class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors"
+                :disabled="!hasCards"
+                class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Clear Dashboard
               </button>
               <button
                 @click="exportDashboard"
-                class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors"
+                :disabled="!hasCards"
+                class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Export Dashboard
               </button>
@@ -61,6 +69,13 @@
                 class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors"
               >
                 Import Dashboard
+              </button>
+              <div class="border-t border-border my-1"></div>
+              <button
+                @click="refreshDashboard"
+                class="w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors"
+              >
+                Refresh Dashboard
               </button>
             </div>
           </div>
@@ -71,12 +86,12 @@
     <!-- Main Dashboard Content -->
     <div class="flex-1 overflow-hidden">
       <!-- Loading State -->
-      <div v-if="isDashboardLoading" class="h-full flex items-center justify-center">
+      <div v-if="isDashboardLoading && !hasCards" class="h-full flex items-center justify-center">
         <div class="text-center">
           <svg class="w-8 h-8 animate-spin mx-auto mb-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <p class="text-muted-foreground">Initializing dashboard...</p>
+          <p class="text-muted-foreground">{{ dashboardLoadingMessage }}</p>
         </div>
       </div>
       
@@ -109,6 +124,7 @@
           :dashboard-id="dashboardId"
           :show-status-text="showStatusText"
           :allow-title-edit="allowTitleEdit"
+          :grid-options="gridOptions"
           @card-selected="handleCardSelected"
           @card-deselected="handleCardDeselected"
           @card-added="handleCardAdded"
@@ -140,7 +156,8 @@
         <div class="space-y-3">
           <button
             @click="addCard('publisher')"
-            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors"
+            :disabled="isDashboardLoading"
+            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div class="flex items-center gap-3">
               <svg class="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -155,7 +172,8 @@
           
           <button
             @click="addCard('subscriber')"
-            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors"
+            :disabled="isDashboardLoading"
+            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div class="flex items-center gap-3">
               <svg class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -170,7 +188,8 @@
           
           <button
             @click="addCard('chart')"
-            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors"
+            :disabled="isDashboardLoading"
+            class="w-full p-4 text-left border border-border rounded-lg hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div class="flex items-center gap-3">
               <svg class="w-8 h-8 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -215,12 +234,21 @@ const dashboardGrid = ref(null);
 const showAddCard = ref(false);
 const showDashboardMenu = ref(false);
 const isDashboardLoading = ref(false);
+const dashboardLoadingMessage = ref('Loading...');
 const selectedCardId = ref(null);
 
 // Props and configuration
 const dashboardId = computed(() => route.params.id || 'default');
 const showStatusText = ref(false);
 const allowTitleEdit = ref(true);
+const gridOptions = ref({
+  cellHeight: 100,
+  margin: 5,
+  animate: true,
+  float: false,
+  column: 12,
+  maxRow: 0
+});
 
 // Computed properties
 const activeDashboard = computed(() => dashboardStore.activeDashboard);
@@ -261,12 +289,13 @@ async function addCard(cardType) {
 
   try {
     isDashboardLoading.value = true;
+    dashboardLoadingMessage.value = `Adding ${cardType} card...`;
     
     // Create default card configuration based on type
     const cardConfig = createDefaultCardConfig(cardType);
     
     // Add card to store
-    const newCard = dashboardStore.addCard(cardConfig);
+    const newCard = await dashboardStore.addCard(cardConfig);
     
     if (newCard) {
       success(`${cardType.charAt(0).toUpperCase() + cardType.slice(1)} card added`);
@@ -274,11 +303,11 @@ async function addCard(cardType) {
       // Close modal
       showAddCard.value = false;
       
-      // Add widget to grid
+      // Wait for the grid to update
       await nextTick();
-      if (dashboardGrid.value) {
-        dashboardGrid.value.addWidget(newCard);
-      }
+      
+      // The grid will automatically pick up the new card from the store
+      console.log(`[Dashboard] Added card: ${newCard.id}`);
     }
   } catch (err) {
     console.error('[Dashboard] Failed to add card:', err);
@@ -302,14 +331,13 @@ async function clearDashboard() {
   if (confirm(confirmMessage)) {
     try {
       isDashboardLoading.value = true;
+      dashboardLoadingMessage.value = 'Clearing dashboard...';
       
-      // Remove all cards
+      // Remove all cards from store
       const cardIds = cards.value.map(card => card.id);
       
       for (const cardId of cardIds) {
-        if (dashboardGrid.value) {
-          dashboardGrid.value.removeWidget(cardId);
-        }
+        await dashboardStore.removeCard(cardId);
       }
       
       success('Dashboard cleared');
@@ -372,6 +400,9 @@ function importDashboard() {
     if (!file) return;
     
     try {
+      isDashboardLoading.value = true;
+      dashboardLoadingMessage.value = 'Importing dashboard...';
+      
       const text = await file.text();
       const config = JSON.parse(text);
       
@@ -380,10 +411,10 @@ function importDashboard() {
       if (result) {
         success('Dashboard imported successfully');
         
-        // Refresh the dashboard
+        // Refresh the dashboard grid
         await nextTick();
         if (dashboardGrid.value) {
-          dashboardGrid.value.refreshGrid();
+          await dashboardGrid.value.refreshGrid();
         }
       } else {
         error('Failed to import dashboard');
@@ -391,10 +422,36 @@ function importDashboard() {
     } catch (err) {
       console.error('[Dashboard] Import failed:', err);
       error('Invalid dashboard file');
+    } finally {
+      isDashboardLoading.value = false;
     }
   };
   
   input.click();
+  
+  // Close menu
+  showDashboardMenu.value = false;
+}
+
+/**
+ * Refresh the dashboard
+ */
+async function refreshDashboard() {
+  try {
+    isDashboardLoading.value = true;
+    dashboardLoadingMessage.value = 'Refreshing dashboard...';
+    
+    if (dashboardGrid.value) {
+      await dashboardGrid.value.refreshGrid();
+    }
+    
+    success('Dashboard refreshed');
+  } catch (err) {
+    console.error('[Dashboard] Refresh failed:', err);
+    error('Failed to refresh dashboard');
+  } finally {
+    isDashboardLoading.value = false;
+  }
   
   // Close menu
   showDashboardMenu.value = false;
@@ -523,6 +580,11 @@ function handleKeyboardShortcuts(event) {
         event.preventDefault();
         importDashboard();
         break;
+        
+      case 'r':
+        event.preventDefault();
+        refreshDashboard();
+        break;
     }
   }
   
@@ -546,11 +608,9 @@ onMounted(async () => {
   // Set up keyboard shortcuts
   document.addEventListener('keydown', handleKeyboardShortcuts);
   
-  // Set up dashboard grid container after mount
+  // Wait for next tick to ensure DOM is ready
   await nextTick();
-  if (dashboardGrid.value) {
-    console.log('[Dashboard] Dashboard grid ready');
-  }
+  console.log('[Dashboard] Dashboard view mounted');
 });
 
 onUnmounted(() => {
