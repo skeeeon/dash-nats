@@ -69,8 +69,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
       activeDashboardId.value = savedActive;
     }
     
-    // Set up automatic persistence
-    setupAutoPersistence();
+    console.log('[DashboardStore] Dashboard store initialized');
   }
 
   /**
@@ -235,12 +234,19 @@ export const useDashboardStore = defineStore('dashboard', () => {
    */
   function updateGridLayout(layout) {
     const dashboard = activeDashboard.value;
+    
+    // Ensure layout is valid
+    if (!Array.isArray(layout)) {
+      console.warn('[DashboardStore] Invalid layout provided');
+      return;
+    }
+    
     dashboard.gridLayout = layout.map(item => ({
       id: item.id,
-      x: item.x,
-      y: item.y,
-      w: item.w,
-      h: item.h
+      x: item.x || 0,
+      y: item.y || 0,
+      w: item.w || 4,
+      h: item.h || 3
     }));
     
     dashboard.updatedAt = Date.now();
@@ -323,26 +329,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   // Private helper functions
-
-  /**
-   * Setup automatic persistence using store subscription
-   */
-  function setupAutoPersistence() {
-    // Auto-save to localStorage on state changes
-    const unsubscribe = $subscribe((mutation, state) => {
-      // Debounced save to prevent too frequent saves
-      if (setupAutoPersistence.saveTimeout) {
-        clearTimeout(setupAutoPersistence.saveTimeout);
-      }
-      
-      setupAutoPersistence.saveTimeout = setTimeout(() => {
-        saveDashboards();
-      }, 500);
-    });
-    
-    // Store unsubscribe function for cleanup
-    setupAutoPersistence.unsubscribe = unsubscribe;
-  }
 
   /**
    * Load dashboards from storage
@@ -453,7 +439,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
    */
   function getDefaultHeight(type) {
     switch (type) {
-      case 'publisher': return 2;
+      case 'publisher': return 3;
       case 'subscriber': return 4;
       case 'chart': return 6;
       default: return 3;

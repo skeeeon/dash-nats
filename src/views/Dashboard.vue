@@ -191,7 +191,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useDashboard } from '@/composables/useDashboard.js';
+import { useDashboardStore } from '@/stores/dashboard.js';
 import { useNatsConnection } from '@/composables/useNatsConnection.js';
 import { useToast } from '@/composables/useToast.js';
 import DashboardGrid from '@/components/dashboard/DashboardGrid.vue';
@@ -201,24 +201,14 @@ const route = useRoute();
 const router = useRouter();
 
 // Composables
-const {
-  activeDashboard,
-  hasCards,
-  isLoading: isDashboardLoadingFromStore,
-  addCard: addCardToStore,
-  removeCard: removeCardFromStore,
-  exportDashboard: exportDashboardFromStore,
-  importDashboard: importDashboardFromStore,
-  initialize: initializeDashboard
-} = useDashboard();
-
+const dashboardStore = useDashboardStore();
 const {
   isConnected,
   connectionStatusText,
   connectionError
 } = useNatsConnection();
 
-const { success, error, info, warning } = useToast();
+const { success, error, info } = useToast();
 
 // Local reactive state
 const dashboardGrid = ref(null);
@@ -233,12 +223,12 @@ const showStatusText = ref(false);
 const allowTitleEdit = ref(true);
 
 // Computed properties
+const activeDashboard = computed(() => dashboardStore.activeDashboard);
+const hasCards = computed(() => dashboardStore.hasCards);
+const cards = computed(() => activeDashboard.value?.cards || []);
+
 const dashboardTitle = computed(() => {
   return activeDashboard.value?.name || 'Dashboard';
-});
-
-const cards = computed(() => {
-  return activeDashboard.value?.cards || [];
 });
 
 const connectionStatusMessage = computed(() => {
@@ -275,8 +265,8 @@ async function addCard(cardType) {
     // Create default card configuration based on type
     const cardConfig = createDefaultCardConfig(cardType);
     
-    // Add card through composable
-    const newCard = await addCardToStore(cardConfig);
+    // Add card to store
+    const newCard = dashboardStore.addCard(cardConfig);
     
     if (newCard) {
       success(`${cardType.charAt(0).toUpperCase() + cardType.slice(1)} card added`);
@@ -284,10 +274,10 @@ async function addCard(cardType) {
       // Close modal
       showAddCard.value = false;
       
-      // Wait for grid to update then refresh
+      // Add widget to grid
       await nextTick();
       if (dashboardGrid.value) {
-        dashboardGrid.value.refreshGrid();
+        dashboardGrid.value.addWidget(newCard);
       }
     }
   } catch (err) {
@@ -317,16 +307,12 @@ async function clearDashboard() {
       const cardIds = cards.value.map(card => card.id);
       
       for (const cardId of cardIds) {
-        await removeCardFromStore(cardId);
+        if (dashboardGrid.value) {
+          dashboardGrid.value.removeWidget(cardId);
+        }
       }
       
       success('Dashboard cleared');
-      
-      // Refresh grid
-      await nextTick();
-      if (dashboardGrid.value) {
-        dashboardGrid.value.refreshGrid();
-      }
     } catch (err) {
       console.error('[Dashboard] Failed to clear dashboard:', err);
       error(`Failed to clear dashboard: ${err.message}`);
@@ -344,7 +330,7 @@ async function clearDashboard() {
  */
 function exportDashboard() {
   try {
-    const config = exportDashboardFromStore(dashboardId.value);
+    const config = dashboardStore.exportDashboard(dashboardId.value);
     
     if (!config) {
       error('No dashboard configuration to export');
@@ -389,9 +375,9 @@ function importDashboard() {
       const text = await file.text();
       const config = JSON.parse(text);
       
-      const success_result = importDashboardFromStore(config);
+      const result = dashboardStore.importDashboard(config);
       
-      if (success_result) {
+      if (result) {
         success('Dashboard imported successfully');
         
         // Refresh the dashboard
@@ -510,25 +496,6 @@ function createDefaultCardConfig(type) {
 }
 
 /**
- * Initialize dashboard
- */
-async function initializeDashboardView() {
-  try {
-    isDashboardLoading.value = true;
-    
-    // Initialize dashboard system
-    await initializeDashboard();
-    
-    console.log(`[Dashboard] Dashboard initialized: ${dashboardId.value}`);
-  } catch (err) {
-    console.error('[Dashboard] Initialization failed:', err);
-    error('Failed to initialize dashboard');
-  } finally {
-    isDashboardLoading.value = false;
-  }
-}
-
-/**
  * Handle keyboard shortcuts
  * @param {KeyboardEvent} event - Keyboard event
  */
@@ -573,8 +540,8 @@ function handleKeyboardShortcuts(event) {
 onMounted(async () => {
   console.log('[Dashboard] Mounting dashboard view');
   
-  // Initialize dashboard
-  await initializeDashboardView();
+  // Initialize dashboard store
+  dashboardStore.initialize();
   
   // Set up keyboard shortcuts
   document.addEventListener('keydown', handleKeyboardShortcuts);
